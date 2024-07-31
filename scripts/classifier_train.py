@@ -75,7 +75,6 @@ def main():
         model=model, use_fp16=args.classifier_use_fp16, initial_lg_loss_scale=16.0
     )
 
-
     logger.log("creating data loader...")
 
     if args.dataset == 'brats':
@@ -87,7 +86,7 @@ def main():
         data = iter(datal)
 
     elif args.dataset == 'chexpert':
-        data = load_data(
+        datal = data = load_data(
             data_dir=args.data_dir,
             batch_size=args.batch_size,
             image_size=args.image_size,
@@ -96,12 +95,11 @@ def main():
         print('dataset is chexpert')
 
 
-
     logger.log(f"creating optimizer...")
     opt = AdamW(mp_trainer.master_params, lr=args.lr, weight_decay=args.weight_decay)
     if args.resume_checkpoint:
         opt_checkpoint = bf.join(
-            bf.dirname(args.resume_checkpoint), f"opt{resume_step:06}.pt"
+            bf.dirname(args.resume_checkpoint), f"opt{args.dataset}class{resume_step:06}.pt"
         )
         logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}")
         opt.load_state_dict(
@@ -152,11 +150,10 @@ def main():
             loss = loss.mean()
             if prefix=="train":
                 viz.line(X=th.ones((1, 1)).cpu() * step, Y=th.Tensor([loss]).unsqueeze(0).cpu(),
-                     win=loss_window, name='loss_cls',
-                     update='append')
+                    win=loss_window, name='loss_cls',
+                    update='append')
 
             else:
-
                 output_idx = logits[0].argmax()
                 print('outputidx', output_idx)
                 output_max = logits[0, output_idx]
@@ -166,7 +163,7 @@ def main():
                 print('saliency', saliency.shape)
                 viz.heatmap(visualize(saliency[0, ...]))
                 viz.image(visualize(sub_batch[0, 0,...]))
-                viz.image(visualize(sub_batch[0, 1, ...]))
+                # viz.image(visualize(sub_batch[0, 1, ...]))
                 th.cuda.empty_cache()
 
 
@@ -198,20 +195,21 @@ def main():
         acctrain=correct/total
 
         mp_trainer.optimize(opt)
-          
+
         if not step % args.log_interval:
             logger.dumpkvs()
+
         if (
             step
             and dist.get_rank() == 0
             and not (step + resume_step) % args.save_interval
         ):
             logger.log("saving model...")
-            save_model(mp_trainer, opt, step + resume_step)
+            save_model(mp_trainer, opt, args.dataset, step + resume_step)
 
     if dist.get_rank() == 0:
         logger.log("saving model...")
-        save_model(mp_trainer, opt, step + resume_step)
+        save_model(mp_trainer, opt, args.dataset, step + resume_step)
     dist.barrier()
 
 
@@ -221,13 +219,13 @@ def set_annealed_lr(opt, base_lr, frac_done):
         param_group["lr"] = lr
 
 
-def save_model(mp_trainer, opt, step):
+def save_model(mp_trainer, opt, dataset, step):
     if dist.get_rank() == 0:
         th.save(
             mp_trainer.master_params_to_state_dict(mp_trainer.master_params),
-            os.path.join(logger.get_dir(), f"modelbratsclass{step:06d}.pt"),
+            os.path.join(logger.get_dir(), f"model{dataset}class{step:06d}.pt"),
         )
-        th.save(opt.state_dict(), os.path.join(logger.get_dir(), f"optbratsclass{step:06d}.pt"))
+        th.save(opt.state_dict(), os.path.join(logger.get_dir(), f"opt{dataset}class{step:06d}.pt"))
 
 def compute_top_k(logits, labels, k, reduction="mean"):
     _, top_ks = th.topk(logits, k, dim=-1)

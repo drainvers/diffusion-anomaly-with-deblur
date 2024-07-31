@@ -26,6 +26,21 @@ from guided_diffusion.script_util import (
     add_dict_to_argparser,
     args_to_dict,
 )
+
+# Evaluation metrics
+from torcheval.metrics import PeakSignalNoiseRatio
+from torcheval.metrics import StructuralSimilarity
+
+from sklearn.metrics import roc_auc_score
+from skimage.filters import threshold_otsu
+
+# Saving images
+from PIL import Image
+
+# Draw mask and convert to bounding box
+from torchvision.utils import draw_segmentation_masks, draw_bounding_boxes
+from torchvision.ops import masks_to_boxes
+
 def visualize(img):
     _min = img.min()
     _max = img.max()
@@ -33,6 +48,9 @@ def visualize(img):
     return normalized_img
 
 def main():
+    psnr = PeakSignalNoiseRatio()
+    ssim = StructuralSimilarity()
+
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
@@ -121,9 +139,13 @@ def main():
           viz.image(visualize(img[0][0, 3, ...]), opts=dict(caption="img input 3"))
           viz.image(visualize(img[3][0, ...]), opts=dict(caption="ground truth"))
         else:
-          viz.image(visualize(img[0][0, ...]), opts=dict(caption="img input"))
-          print('img1', img[1])
+        #   if th.equal(img[1]["y"], th.tensor([1])):
+        #     continue # take only diseased images as input
+        
           number=img[1]["path"]
+          
+          viz.image(visualize(img[0][0, ...]), opts=dict(caption=f"img input {number[0]}"))
+          print('img1', img[1])
           print('number', number)
 
         if args.class_cond:
@@ -164,10 +186,38 @@ def main():
           viz.heatmap(visualize(difftot), opts=dict(caption="difftot"))
           
         elif args.dataset=='chexpert':
-          viz.image(visualize(sample[0, ...]), opts=dict(caption="sampled output"+str(name)))
+          viz.image(visualize(sample[0, ...]), opts=dict(caption=f'sampled output {img[1]["path"][0]}'))
           diff=abs(visualize(org[0, 0,...])-visualize(sample[0,0, ...]))
           diff=np.array(diff.cpu())
-          viz.heatmap(np.flipud(diff), opts=dict(caption="diff"))
+          # viz.heatmap(visualize(np.flipud(diff)), opts=dict(caption=f'diff {img[1]["path"][0]}'))
+          cm = plt.get_cmap('jet') # Returns (R, G, B, A) in float64
+          colored_diff = cm(visualize(diff))[:, :, :3]
+          viz.image(colored_diff.transpose(2, 0, 1), opts=dict(caption=f'diff {img[1]["path"][0]}'))
+
+          # Save image
+          heatmap_img = (colored_diff * 255).astype(np.uint8)
+          original_img = (np.concatenate((np.array(visualize(img[0][0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
+          sampled_img = (np.concatenate((np.array(visualize(sample[0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
+          result = Image.fromarray(np.hstack([original_img,
+                                              sampled_img,
+                                              heatmap_img]))
+          result.save(f'results/pretrained/normal_{img[1]["path"][0]}.png')
+          # End of save image
+
+          psnr.reset()
+          ssim.reset()
+
+          print(org.shape, sample.shape)
+          psnr.update(org, sample)
+          ssim.update(org, sample)
+
+          logger.log(f'{img[1]["path"][0]} psnr, ssim: {psnr.compute()}, {ssim.compute()}')
+
+          thresh = threshold_otsu(diff)
+          mask = th.where(th.tensor(diff) > thresh, 1, 0)  #this is our predicted binary segmentation
+          viz.image(visualize(mask), opts=dict(caption=f'mask_{img[1]["path"][0]}'))
+
+          boxes = masks_to_boxes(mask)
 
 
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]

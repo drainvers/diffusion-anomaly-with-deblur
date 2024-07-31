@@ -6,6 +6,21 @@ import os.path
 import nibabel
 from scipy import ndimage
 
+'''
+class VinDRDataset(torch.utils.data.Dataset):
+    def __init__(self, directory, test_flag=False):
+        self.directory = os.path.expanduser(directory)
+        self.test_flag = test_flag
+        self.database = []
+        pass
+
+    def __getitem__(self, x):
+        pass
+
+    def __len__(self):
+        return len(self.database)
+'''
+
 class BRATSDataset(torch.utils.data.Dataset):
     def __init__(self, directory, test_flag=False):
         '''

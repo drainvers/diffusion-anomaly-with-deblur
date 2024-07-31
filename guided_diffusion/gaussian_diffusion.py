@@ -434,7 +434,7 @@ class GaussianDiffusion:
         )
         return out, cfn
 
-    def sample_known(self, img, batch_size = 1):
+    def sample_known(self, model, img, batch_size = 1):
         image_size = self.image_size
         channels = self.channels
         return self.p_sample_loop_known(model,(batch_size, channels, image_size, image_size), img)
@@ -687,11 +687,11 @@ class GaussianDiffusion:
 
                     if i%100==0:
                      print('i', i)
-                     viz.image(visualize(img[0,0,...]), opts=dict(caption=str(i)))
-                     viz.image(visualize(img[0, 1,...]), opts=dict(caption=str(i)))
-                     viz.image(visualize(img[0, 2,...]), opts=dict(caption=str(i)))
-                     viz.image(visualize(img[0, 3,...]), opts=dict(caption=str(i)))
-                     viz.image(visualize(out["saliency"][0,0,...]), opts=dict(caption='saliency'))
+                    #  viz.image(visualize(img[0,0,...]), opts=dict(caption=str(i)))
+                    #  viz.image(visualize(img[0, 1,...]), opts=dict(caption=str(i)))
+                    #  viz.image(visualize(img[0, 2,...]), opts=dict(caption=str(i)))
+                    #  viz.image(visualize(img[0, 3,...]), opts=dict(caption=str(i)))
+                    #  viz.image(visualize(out["saliency"][0,0,...]), opts=dict(caption='saliency'))
               
 
     def ddim_sample(
@@ -866,7 +866,7 @@ class GaussianDiffusion:
         ):
 
             final = sample
-        viz.image(visualize(final["sample"].cpu()[0, ...]), opts=dict(caption="sample"+ str(10) ))
+        # viz.image(visualize(final["sample"].cpu()[0, ...]), opts=dict(caption="sample"+ str(10) ))
         return final["sample"]
 
 
@@ -918,10 +918,11 @@ class GaussianDiffusion:
             eta=eta,
         ):
             final = sample
-        viz.image(visualize(final["sample"].cpu()[0,0, ...]), opts=dict(caption="final 0" ))
-        viz.image(visualize(final["sample"].cpu()[0,1, ...]), opts=dict(caption="final 1" ))
-        viz.image(visualize(final["sample"].cpu()[0,2, ...]), opts=dict(caption="final 2" ))
-        viz.image(visualize(final["sample"].cpu()[0,3, ...]), opts=dict(caption="final 3" ))
+        # viz.image(visualize(final["sample"].cpu()[0,0, ...]), opts=dict(caption="final 0" ))
+        # Comment the following three lines if running with CheXpert
+        # viz.image(visualize(final["sample"].cpu()[0,1, ...]), opts=dict(caption="final 1" ))
+        # viz.image(visualize(final["sample"].cpu()[0,2, ...]), opts=dict(caption="final 2" ))
+        # viz.image(visualize(final["sample"].cpu()[0,3, ...]), opts=dict(caption="final 3" ))
 
 
         return final["sample"], x_noisy, img
@@ -985,7 +986,7 @@ class GaussianDiffusion:
                 yield out
                 img = out["sample"]
 
-        viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="reversesample"))
+        # viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="reversesample"))
         for i in indices:
                 t = th.tensor([i] * shape[0], device=device)
                 with th.no_grad():
@@ -1165,7 +1166,7 @@ class GaussianDiffusion:
             t_batch = th.tensor([t] * batch_size, device=device)
             noise = th.randn_like(x_start)
             x_t = self.q_sample(x_start=x_start, t=t_batch, noise=noise)
-            viz.image(visualize(x_t[0, ...]), opts=dict(caption="xt"))
+            # viz.image(visualize(x_t[0, ...]), opts=dict(caption="xt"))
 
             # Calculate VLB term at the current timestep
             with th.no_grad():

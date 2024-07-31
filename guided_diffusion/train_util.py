@@ -1,6 +1,7 @@
 import copy
 import functools
 import os
+import re
 
 import blobfile as bf
 import torch as th
@@ -14,6 +15,7 @@ from .nn import update_ema
 from .resample import LossAwareSampler, UniformSampler
 from visdom import Visdom
 viz = Visdom(port=8850)
+
 
 INITIAL_LOG_LOSS_SCALE = 20.0
 
@@ -134,7 +136,7 @@ class TrainLoop:
         ema_params = copy.deepcopy(self.mp_trainer.master_params)
 
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
-        ema_checkpoint = find_ema_checkpoint(main_checkpoint, self.resume_step, rate)
+        ema_checkpoint = find_ema_checkpoint(main_checkpoint, self.dataset, self.resume_step, rate)
         if ema_checkpoint:
             if dist.get_rank() == 0:
                 logger.log(f"loading EMA from checkpoint: {ema_checkpoint}...")
@@ -149,7 +151,7 @@ class TrainLoop:
     def _load_optimizer_state(self):
         main_checkpoint = find_resume_checkpoint() or self.resume_checkpoint
         opt_checkpoint = bf.join(
-            bf.dirname(main_checkpoint), f"opt{self.resume_step:06}.pt"
+            bf.dirname(main_checkpoint), f"opt{self.dataset}{self.resume_step:06}.pt"
         )
         if bf.exists(opt_checkpoint):
             logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}")
@@ -262,13 +264,14 @@ class TrainLoop:
 
     def save(self):
         def save_checkpoint(rate, params):
+
             state_dict = self.mp_trainer.master_params_to_state_dict(params)
             if dist.get_rank() == 0:
                 logger.log(f"saving model {rate}...")
                 if not rate:
-                    filename = f"brats2update{(self.step+self.resume_step):06d}.pt"
+                    filename = f"model{self.dataset}{(self.step+self.resume_step):06d}.pt"
                 else:
-                    filename = f"emabrats2update_{rate}_{(self.step+self.resume_step):06d}.pt"
+                    filename = f"ema{self.dataset}_{rate}_{(self.step+self.resume_step):06d}.pt"
                 print('filename', filename)
                 with bf.BlobFile(bf.join(get_blob_logdir(), filename), "wb") as f:
                     th.save(state_dict, f)
@@ -279,7 +282,7 @@ class TrainLoop:
 
         if dist.get_rank() == 0:
             with bf.BlobFile(
-                bf.join(get_blob_logdir(), f"optbrats2update{(self.step+self.resume_step):06d}.pt"),
+                bf.join(get_blob_logdir(), f"opt{self.dataset}{(self.step+self.resume_step):06d}.pt"),
                 "wb",
             ) as f:
                 th.save(self.opt.state_dict(), f)
@@ -292,10 +295,15 @@ def parse_resume_step_from_filename(filename):
     Parse filenames of the form path/to/modelNNNNNN.pt, where NNNNNN is the
     checkpoint's number of steps.
     """
-    split = filename.split("model")
-    if len(split) < 2:
+    re_query = re.compile(r"(?:model)?[A-Za-z0-9]*(\d{6})\.pt")
+    re_result = re_query.search(filename)
+    # split = filename.split("model")
+    # if len(split) < 2:
+    #     return 0
+    # split1 = split[-1].split(".")[0]
+    if re_result == None:
         return 0
-    split1 = split[-1].split(".")[0]
+    split1 = re_result.group(1)
     try:
         return int(split1)
     except ValueError:
@@ -314,10 +322,10 @@ def find_resume_checkpoint():
     return None
 
 
-def find_ema_checkpoint(main_checkpoint, step, rate):
+def find_ema_checkpoint(main_checkpoint, dataset, step, rate):
     if main_checkpoint is None:
         return None
-    filename = f"ema_{rate}_{(step):06d}.pt"
+    filename = f"ema{dataset}_{rate}_{(step):06d}.pt"
     path = bf.join(bf.dirname(main_checkpoint), filename)
     if bf.exists(path):
         return path
