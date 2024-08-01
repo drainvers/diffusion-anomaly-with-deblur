@@ -2,8 +2,22 @@ guided_diffusion/__pycache__/*.pyc
 guided_diffusion/.ipynb_checkpoints/*
 results/*
 scripts/*.sh
+DiffPIR/*
+data/*
 
 scripts/chexpert_preproc.py
 scripts/classifier_sample_deblur.py
 scripts/convert_to_npy.py
 scripts/evaluation_metrics.py
+data/chexpert/testing/diseased/*.npy
+data/chexpert/testing/healthy/*.npy
+data/chexpert/training/diseased/*.npy
+data/chexpert/training/healthy/*.npy
+data/chexpert/testing/diseased/patient05883_study2.npy
+data/chexpert/testing/healthy/patient01104_study1.npy
+data/chexpert/training/diseased/patient00122_study6.npy
+data/chexpert/training/diseased/patient00124_study2.npy
+data/chexpert/training/diseased/patient00128_study3.npy
+data/chexpert/training/healthy/patient00485_study2.npy
+data/chexpert/training/healthy/patient00486_study1.npy
+data/chexpert/training/healthy/patient00488_study1.npy

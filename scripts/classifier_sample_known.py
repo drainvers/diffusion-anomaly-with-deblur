@@ -198,10 +198,15 @@ def main():
           heatmap_img = (colored_diff * 255).astype(np.uint8)
           original_img = (np.concatenate((np.array(visualize(img[0][0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
           sampled_img = (np.concatenate((np.array(visualize(sample[0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
-          result = Image.fromarray(np.hstack([original_img,
-                                              sampled_img,
-                                              heatmap_img]))
-          result.save(f'results/pretrained/normal_{img[1]["path"][0]}.png')
+
+          Image.fromarray(heatmap_img).save(f'results/heatmap_{img[1]["path"][0]}.png')
+          Image.fromarray(sampled_img).save(f'results/sampled_{img[1]["path"][0]}.png')
+
+          # result = Image.fromarray(np.hstack([original_img,
+          #                                     sampled_img,
+          #                                     heatmap_img]))
+          # result.save(f'results/{img[1]["path"][0]}.png')
+
           # End of save image
 
           psnr.reset()
