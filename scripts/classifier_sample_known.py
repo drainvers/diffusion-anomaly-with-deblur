@@ -222,8 +222,6 @@ def main():
           mask = th.where(th.tensor(diff) > thresh, 1, 0)  #this is our predicted binary segmentation
           viz.image(visualize(mask), opts=dict(caption=f'mask_{img[1]["path"][0]}'))
 
-          boxes = masks_to_boxes(mask)
-
 
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
