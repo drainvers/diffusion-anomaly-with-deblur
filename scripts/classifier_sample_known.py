@@ -32,7 +32,7 @@ from torcheval.metrics import PeakSignalNoiseRatio
 from torcheval.metrics import StructuralSimilarity
 
 from sklearn.metrics import roc_auc_score
-from skimage.filters import threshold_otsu
+from skimage.filters import threshold_otsu, threshold_mean
 
 # Saving images
 from PIL import Image
@@ -40,6 +40,9 @@ from PIL import Image
 # Draw mask and convert to bounding box
 from torchvision.utils import draw_segmentation_masks, draw_bounding_boxes
 from torchvision.ops import masks_to_boxes
+
+def smooth_segmentation(mask):
+   pass
 
 def visualize(img):
     _min = img.min()
@@ -60,6 +63,10 @@ def main():
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
+
+    # Deblur model
+    # deblur_model, deblur_diffusion = None
+
     if args.dataset=='brats':
       ds = BRATSDataset(args.data_dir, test_flag=True)
       datal = th.utils.data.DataLoader(
@@ -79,6 +86,9 @@ def main():
     model.load_state_dict(
         dist_util.load_state_dict(args.model_path, map_location="cpu")
     )
+    # Load deblur checkpoint here
+    # End of deblur
+
     model.to(dist_util.dev())
     if args.use_fp16:
         model.convert_to_fp16()
@@ -199,13 +209,13 @@ def main():
           original_img = (np.concatenate((np.array(visualize(img[0][0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
           sampled_img = (np.concatenate((np.array(visualize(sample[0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
 
-          Image.fromarray(heatmap_img).save(f'results/heatmap_{img[1]["path"][0]}.png')
-          Image.fromarray(sampled_img).save(f'results/sampled_{img[1]["path"][0]}.png')
+          # Image.fromarray(heatmap_img).save(f'results/heatmap_{img[1]["path"][0]}.png')
+          # Image.fromarray(sampled_img).save(f'results/sampled_{img[1]["path"][0]}.png')
 
-          # result = Image.fromarray(np.hstack([original_img,
-          #                                     sampled_img,
-          #                                     heatmap_img]))
-          # result.save(f'results/{img[1]["path"][0]}.png')
+          result = Image.fromarray(np.hstack([original_img,
+                                              sampled_img,
+                                              heatmap_img]))
+          result.save(f'results/{args.data_dir.split("/")[-1]}/{img[1]["path"][0]}.png')
 
           # End of save image
 
@@ -218,9 +228,11 @@ def main():
 
           logger.log(f'{img[1]["path"][0]} psnr, ssim: {psnr.compute()}, {ssim.compute()}')
 
-          thresh = threshold_otsu(diff)
-          mask = th.where(th.tensor(diff) > thresh, 1, 0)  #this is our predicted binary segmentation
-          viz.image(visualize(mask), opts=dict(caption=f'mask_{img[1]["path"][0]}'))
+          thresh = threshold_otsu(visualize(diff))
+          mask = th.where(th.tensor(visualize(diff)) > thresh, 1, 0)  #this is our predicted binary segmentation
+          viz.image(visualize(mask), opts=dict(caption=f'mask {img[1]["path"][0]}'))
+
+          Image.fromarray((np.array(visualize(mask).cpu()) * 255).astype(np.uint8)).save(f'results/{args.data_dir.split("/")[-1]}/mask_{img[1]["path"][0]}.png')
 
 
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]

@@ -11,6 +11,7 @@ from .train_util import visualize
 from visdom import Visdom
 viz = Visdom(port=8850)
 from scipy import ndimage
+import cv2
 
 
 def load_data(
@@ -85,7 +86,7 @@ def _list_image_files_recursively(data_dir):
     for entry in sorted(bf.listdir(data_dir)):
         full_path = bf.join(data_dir, entry)
         ext = entry.split(".")[-1]
-        if "." in entry and ext.lower() in ["jpg", "jpeg", "png", "gif", "npy"]:
+        if "." in entry and ext.lower() in ["jpg", "jpeg", "png", "tiff", "tif", "npy"]:
             results.append(full_path)
         elif bf.isdir(full_path):
             results.extend(_list_image_files_recursively(full_path))
@@ -102,7 +103,7 @@ class ImageDataset(Dataset):
         num_shards=1,
         random_crop=False,
         random_flip=False,
-        exts=['jpg', 'jpeg', 'png', 'npy']
+        exts=['jpg', 'jpeg', 'png', 'tiff', 'tif', 'npy']
     ):
         super().__init__()
         self.resolution = resolution
@@ -119,11 +120,17 @@ class ImageDataset(Dataset):
 
     def __getitem__(self, idx):
         path = self.local_images[idx]
-        name=str(path).split("/")[-1].split(".")[0]
+        # name=str(path).split("/")[-1].split(".")[0]
+        name, ext = str(path).split("/")[-1].split(".")
         print('path', name)
 
-
-        numpy_img = np.load(path)
+        # Readds ability to read known image formats, taken from upstream guided diffusion repo
+        if ext == 'npy':
+            numpy_img = np.load(path)
+        else:
+            numpy_img = np.asarray(Image.open(path).convert('L')) # Load in grayscale image as ndarray
+            numpy_img = cv2.resize(numpy_img, (256, 256), interpolation=cv2.INTER_AREA)
+            numpy_img = numpy_img[:, :, np.newaxis] # Changes image shape to (W, H, 1)
         arr = visualize(numpy_img).astype(np.float32)
 
         out_dict = {}
