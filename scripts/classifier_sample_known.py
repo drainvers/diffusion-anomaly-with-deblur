@@ -4,7 +4,7 @@ numpy array. This can be used to produce samples for FID evaluation.
 """
 import matplotlib.pyplot as plt
 import argparse
-import os
+from pathlib import Path
 from visdom import Visdom
 viz = Visdom(port=8850)
 import sys
@@ -39,6 +39,7 @@ from PIL import Image
 
 # Draw mask and convert to bounding box
 from torchvision.utils import draw_segmentation_masks, draw_bounding_boxes
+from torchvision.transforms.functional import to_pil_image
 from torchvision.ops import masks_to_boxes
 
 def smooth_segmentation(mask):
@@ -76,17 +77,21 @@ def main():
     
     elif args.dataset=='chexpert':
      data = load_data(
-         data_dir=args.data_dir,
-         batch_size=args.batch_size,
-         image_size=args.image_size,
-         class_cond=True,
+        data_dir=args.data_dir,
+        batch_size=args.batch_size,
+        image_size=args.image_size,
+        class_cond=True,
      )
      datal = iter(data)
    
     model.load_state_dict(
         dist_util.load_state_dict(args.model_path, map_location="cpu")
     )
+
     # Load deblur checkpoint here
+    # For saving our generated images
+    result_dir = Path(f'results/{args.data_dir.split("/")[-1]}')
+    result_dir.mkdir(parents=True, exist_ok=True)
     # End of deblur
 
     model.to(dist_util.dev())
@@ -138,25 +143,25 @@ def main():
      #   img = next(data)  # should return an image from the dataloader "data"
         print('img', img[0].shape, img[1])
         if args.dataset=='brats':
-          Labelmask = th.where(img[3] > 0, 1, 0)
-          number=img[4][0]
-          if img[2]==0:
-              continue    #take only diseased images as input
-              
-          viz.image(visualize(img[0][0, 0, ...]), opts=dict(caption="img input 0"))
-          viz.image(visualize(img[0][0, 1, ...]), opts=dict(caption="img input 1"))
-          viz.image(visualize(img[0][0, 2, ...]), opts=dict(caption="img input 2"))
-          viz.image(visualize(img[0][0, 3, ...]), opts=dict(caption="img input 3"))
-          viz.image(visualize(img[3][0, ...]), opts=dict(caption="ground truth"))
+            Labelmask = th.where(img[3] > 0, 1, 0)
+            number=img[4][0]
+            if img[2]==0:
+                continue    #take only diseased images as input
+                
+            viz.image(visualize(img[0][0, 0, ...]), opts=dict(caption="img input 0"))
+            viz.image(visualize(img[0][0, 1, ...]), opts=dict(caption="img input 1"))
+            viz.image(visualize(img[0][0, 2, ...]), opts=dict(caption="img input 2"))
+            viz.image(visualize(img[0][0, 3, ...]), opts=dict(caption="img input 3"))
+            viz.image(visualize(img[3][0, ...]), opts=dict(caption="ground truth"))
         else:
         #   if th.equal(img[1]["y"], th.tensor([1])):
         #     continue # take only diseased images as input
         
-          number=img[1]["path"]
-          
-          viz.image(visualize(img[0][0, ...]), opts=dict(caption=f"img input {number[0]}"))
-          print('img1', img[1])
-          print('number', number)
+            number=img[1]["path"]
+            
+            viz.image(visualize(img[0][0, ...]), opts=dict(caption=f"img input {number[0]}"))
+            print('img1', img[1])
+            print('number', number)
 
         if args.class_cond:
             classes = th.randint(
@@ -188,52 +193,74 @@ def main():
         print('time for 1000', start.elapsed_time(end))
 
         if args.dataset=='brats':
-          viz.image(visualize(sample[0,0, ...]), opts=dict(caption="sampled output0"))
-          viz.image(visualize(sample[0,1, ...]), opts=dict(caption="sampled output1"))
-          viz.image(visualize(sample[0,2, ...]), opts=dict(caption="sampled output2"))
-          viz.image(visualize(sample[0,3, ...]), opts=dict(caption="sampled output3"))
-          difftot=abs(org[0, :4,...]-sample[0, ...]).sum(dim=0)
-          viz.heatmap(visualize(difftot), opts=dict(caption="difftot"))
+            viz.image(visualize(sample[0,0, ...]), opts=dict(caption="sampled output0"))
+            viz.image(visualize(sample[0,1, ...]), opts=dict(caption="sampled output1"))
+            viz.image(visualize(sample[0,2, ...]), opts=dict(caption="sampled output2"))
+            viz.image(visualize(sample[0,3, ...]), opts=dict(caption="sampled output3"))
+            difftot=abs(org[0, :4,...]-sample[0, ...]).sum(dim=0)
+            viz.heatmap(visualize(difftot), opts=dict(caption="difftot"))
           
         elif args.dataset=='chexpert':
-          viz.image(visualize(sample[0, ...]), opts=dict(caption=f'sampled output {img[1]["path"][0]}'))
-          diff=abs(visualize(org[0, 0,...])-visualize(sample[0,0, ...]))
-          diff=np.array(diff.cpu())
-          # viz.heatmap(visualize(np.flipud(diff)), opts=dict(caption=f'diff {img[1]["path"][0]}'))
-          cm = plt.get_cmap('jet') # Returns (R, G, B, A) in float64
-          colored_diff = cm(visualize(diff))[:, :, :3]
-          viz.image(colored_diff.transpose(2, 0, 1), opts=dict(caption=f'diff {img[1]["path"][0]}'))
+            viz.image(visualize(sample[0, ...]), opts=dict(caption=f'sampled output {img[1]["path"][0]}'))
+            diff=abs(visualize(org[0, 0,...])-visualize(sample[0,0, ...]))
+            diff=np.array(diff.cpu())
+            # viz.heatmap(visualize(np.flipud(diff)), opts=dict(caption=f'diff {img[1]["path"][0]}'))
+            cm = plt.get_cmap('jet') # Returns (R, G, B, A) in float64
+            colored_diff = cm(visualize(diff))[:, :, :3]
+            viz.image(colored_diff.transpose(2, 0, 1), opts=dict(caption=f'diff {img[1]["path"][0]}'))
 
-          # Save image
-          heatmap_img = (colored_diff * 255).astype(np.uint8)
-          original_img = (np.concatenate((np.array(visualize(img[0][0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
-          sampled_img = (np.concatenate((np.array(visualize(sample[0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
+            # Save image
+            heatmap_img = (colored_diff * 255).astype(np.uint8)
+            original_img = (np.concatenate((np.array(visualize(img[0][0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
+            sampled_img = (np.concatenate((np.array(visualize(sample[0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
 
-          # Image.fromarray(heatmap_img).save(f'results/heatmap_{img[1]["path"][0]}.png')
-          # Image.fromarray(sampled_img).save(f'results/sampled_{img[1]["path"][0]}.png')
+            thresh = threshold_otsu(visualize(diff))
+            logger.log(f'threshold: {thresh}')
+            mask = th.where(th.tensor(visualize(diff)) > 0.5, 1, 0)  #this is our predicted binary segmentation
+            viz.image(visualize(mask), opts=dict(caption=f'mask {img[1]["path"][0]}'))
 
-          result = Image.fromarray(np.hstack([original_img,
-                                              sampled_img,
-                                              heatmap_img]))
-          result.save(f'results/{args.data_dir.split("/")[-1]}/{img[1]["path"][0]}.png')
+            # Convert mask to boxes
+            obj_ids = th.unique(mask)
+            obj_ids = obj_ids[1:]
+            masks = mask == obj_ids[:, None, None]
 
-          # End of save image
+            boxes = masks_to_boxes(masks)
+            drawn_boxes = draw_bounding_boxes((img[0][0, ...] * 255).type(th.uint8).repeat(3, 1, 1), boxes, colors="red")
+            # fig, _ = show(drawn_boxes)
+            viz.image(drawn_boxes, opts=dict(caption=f'bbox {img[1]["path"][0]}'))
 
-          psnr.reset()
-          ssim.reset()
+            # Image.fromarray((np.array(visualize(mask).cpu()) * 255).astype(np.uint8)).save(f'results/{args.data_dir.split("/")[-1]}/mask_{img[1]["path"][0]}.png')
 
-          print(org.shape, sample.shape)
-          psnr.update(org, sample)
-          ssim.update(org, sample)
+            # Image.fromarray(heatmap_img).save(f'results/heatmap_{img[1]["path"][0]}.png')
+            # Image.fromarray(sampled_img).save(f'results/sampled_{img[1]["path"][0]}.png')
 
-          logger.log(f'{img[1]["path"][0]} psnr, ssim: {psnr.compute()}, {ssim.compute()}')
+            mask = (np.array(mask.cpu().repeat(3, 1, 1)).transpose(1, 2, 0) * 255).astype(np.uint8)
+            drawn_boxes = np.array(drawn_boxes.cpu()).transpose(1, 2, 0).astype(np.uint8)
 
-          thresh = threshold_otsu(visualize(diff))
-          mask = th.where(th.tensor(visualize(diff)) > thresh, 1, 0)  #this is our predicted binary segmentation
-          viz.image(visualize(mask), opts=dict(caption=f'mask {img[1]["path"][0]}'))
+            print(original_img.shape)
+            print(sampled_img.shape)
+            print(heatmap_img.shape)
+            print(mask.shape)
+            print(drawn_boxes.shape)
 
-          Image.fromarray((np.array(visualize(mask).cpu()) * 255).astype(np.uint8)).save(f'results/{args.data_dir.split("/")[-1]}/mask_{img[1]["path"][0]}.png')
+            result = Image.fromarray(np.hstack([original_img,
+                                                sampled_img,
+                                                heatmap_img,
+                                                mask,
+                                                drawn_boxes]))
+            result.save(f'results/{args.data_dir.split("/")[-2]}/{img[1]["path"][0]}.png')
 
+            # End of save image
+
+            psnr.reset()
+            ssim.reset()
+
+            print(org.shape, sample.shape)
+            psnr.update(org, sample)
+            ssim.update(org, sample)
+
+            logger.log(f'{img[1]["path"][0]} psnr, ssim: {psnr.compute()}, {ssim.compute()}')
+        
 
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
