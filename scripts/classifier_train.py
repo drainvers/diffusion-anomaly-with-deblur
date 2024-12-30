@@ -86,12 +86,13 @@ def main():
         data = iter(datal)
 
     elif args.dataset == 'chexpert':
-        datal = data = load_data(
+        datal = load_data(
             data_dir=args.data_dir,
             batch_size=args.batch_size,
             image_size=args.image_size,
             class_cond=True,
         )
+        data = iter(datal)
         print('dataset is chexpert')
 
 
@@ -114,7 +115,7 @@ def main():
             batch, extra, labels,_ , _ = next(data_loader)
             print('IS BRATS')
 
-        elif  args.dataset=='chexpert':
+        elif args.dataset=='chexpert':
             batch, extra = next(data_loader)
             labels = extra["y"].to(dist_util.dev())
             print('IS CHEXPERT')

@@ -1,18 +1,20 @@
 """
-Train a diffusion model on images.
+Train a super-resolution model.
 """
 import sys
 import argparse
 import torch as th
 sys.path.append("..")
 sys.path.append(".")
-from guided_diffusion.bratsloader import BRATSDataset
+
+import torch.nn.functional as F
+
 from guided_diffusion import dist_util, logger
 from guided_diffusion.image_datasets import load_data
 from guided_diffusion.resample import create_named_schedule_sampler
 from guided_diffusion.script_util import (
-    model_and_diffusion_defaults,
-    create_model_and_diffusion,
+    sr_model_and_diffusion_defaults,
+    sr_create_model_and_diffusion,
     args_to_dict,
     add_dict_to_argparser,
 )
@@ -26,36 +28,27 @@ def main():
     dist_util.setup_dist()
     logger.configure()
 
-    logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(
-        **args_to_dict(args, model_and_diffusion_defaults().keys())
+    logger.log("creating model...")
+    model, diffusion = sr_create_model_and_diffusion(
+        **args_to_dict(args, sr_model_and_diffusion_defaults().keys())
     )
     model.to(dist_util.dev())
-    schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion,  maxt=1000)
+    schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
 
     logger.log("creating data loader...")
-
-    if args.dataset == 'brats':
-        ds = BRATSDataset(args.data_dir, test_flag=False)
-        datal = th.utils.data.DataLoader(
-            ds,
-            batch_size=args.batch_size,
-            shuffle=True)
-
-    elif args.dataset == 'chexpert':
-        datal = load_data(
-            data_dir=args.data_dir,
-            batch_size=args.batch_size,
-            image_size=args.image_size,
-            class_cond=True,
-        )
-        print('dataset is chexpert')
+    data = load_superres_data(
+        args.data_dir,
+        args.batch_size,
+        large_size=args.large_size,
+        small_size=args.small_size,
+        class_cond=args.class_cond,
+    )
 
     logger.log("training...")
     TrainLoop(
         model=model,
         diffusion=diffusion,
-        data=datal,
+        data=data,
         batch_size=args.batch_size,
         microbatch=args.microbatch,
         lr=args.lr,
@@ -68,8 +61,19 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
-        dataset=args.dataset
     ).run_loop()
+
+
+def load_superres_data(data_dir, batch_size, large_size, small_size, class_cond=False):
+    data = load_data(
+        data_dir=data_dir,
+        batch_size=batch_size,
+        image_size=large_size,
+        class_cond=class_cond,
+    )
+    for large_batch, model_kwargs in data:
+        model_kwargs["low_res"] = F.interpolate(large_batch, small_size, mode="area")
+        yield large_batch, model_kwargs
 
 
 def create_argparser():
@@ -80,16 +84,16 @@ def create_argparser():
         weight_decay=0.0,
         lr_anneal_steps=0,
         batch_size=1,
-        microbatch=-1,  # -1 disables microbatches
-        ema_rate="0.9999",  # comma-separated list of EMA values
-        log_interval=100,
+        microbatch=-1,
+        ema_rate="0.9999",
+        log_interval=10,
         save_interval=10000,
-        resume_checkpoint='',
+        resume_checkpoint="",
         use_fp16=False,
         fp16_scale_growth=1e-3,
-        dataset='brats'
+        result_dir='./results'
     )
-    defaults.update(model_and_diffusion_defaults())
+    defaults.update(sr_model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     return parser

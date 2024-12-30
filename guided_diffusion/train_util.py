@@ -49,7 +49,7 @@ class TrainLoop:
         self.model = model
         self.diffusion = diffusion
         self.datal = data
-        self.dataset=dataset
+        self.dataset = dataset
         self.iterdatal = iter(data)
         self.batch_size = batch_size
         self.microbatch = microbatch if microbatch > 0 else batch_size
@@ -174,7 +174,7 @@ class TrainLoop:
                     self.iterdatal = iter(self.datal)
                     batch, cond, label, _, _ = next(self.iterdatal)
             elif self.dataset=='chexpert':
-                batch, cond = next(self.datal)
+                batch, cond = next(self.iterdatal)
                 cond.pop("path", None)
 
             self.run_step(batch, cond)
@@ -198,7 +198,7 @@ class TrainLoop:
             self._update_ema()
         self._anneal_lr()
         self.log_step()
-        return lossmse,  sample
+        return lossmse, sample
 
     def forward_backward(self, batch, cond):
         self.mp_trainer.zero_grad()

@@ -410,7 +410,7 @@ class GaussianDiffusion:
 
 
 
-    def condition_score2(self, cond_fn, p_mean_var, x, t, model_kwargs=None):
+    def condition_score(self, cond_fn, p_mean_var, x, t, model_kwargs=None):
         """
         Compute what the p_mean_variance output would have been, should the
         model's score function be conditioned by cond_fn.
@@ -720,7 +720,7 @@ class GaussianDiffusion:
         )
 
         if cond_fn is not None:
-            out, saliency = self.condition_score2(cond_fn, out, x, t, model_kwargs=model_kwargs)
+            out, saliency = self.condition_score(cond_fn, out, x, t, model_kwargs=model_kwargs)
         # Usually our model outputs epsilon, but we re-derive it
         # in case we used x_start or x_prev prediction.
         eps = self._predict_eps_from_xstart(x, t, out["pred_xstart"])

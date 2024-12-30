@@ -1,5 +1,6 @@
 import math
 import random
+import os
 from pathlib import Path
 from PIL import Image
 import blobfile as bf
@@ -85,8 +86,8 @@ def _list_image_files_recursively(data_dir):
     results = []
     for entry in sorted(bf.listdir(data_dir)):
         full_path = bf.join(data_dir, entry)
-        ext = entry.split(".")[-1]
-        if "." in entry and ext.lower() in ["jpg", "jpeg", "png", "tiff", "tif", "npy"]:
+        ext = os.path.splitext(os.path.basename(full_path))[1]
+        if ext.lower() in [".jpg", ".jpeg", ".png", ".tiff", ".tif", ".npy"]:
             results.append(full_path)
         elif bf.isdir(full_path):
             results.extend(_list_image_files_recursively(full_path))
@@ -108,8 +109,6 @@ class ImageDataset(Dataset):
         super().__init__()
         self.resolution = resolution
         self.local_images = [p for ext in exts for p in Path(f'{image_paths}').glob(f'**/*.{ext}')]
-
-
         self.local_classes = None if classes is None else classes[shard:][::num_shards]
         self.random_crop = random_crop
         self.random_flip = random_flip
@@ -121,16 +120,16 @@ class ImageDataset(Dataset):
     def __getitem__(self, idx):
         path = self.local_images[idx]
         # name=str(path).split("/")[-1].split(".")[0]
-        name, ext = str(path).split("/")[-1].split(".")
+        name, ext = os.path.splitext(os.path.basename(path))
         print('path', name)
 
         # Readds ability to read known image formats, taken from upstream guided diffusion repo
-        if ext == 'npy':
+        if ext == '.npy':
             numpy_img = np.load(path)
         else:
-            numpy_img = np.asarray(Image.open(path).convert('L')) # Load in grayscale image as ndarray
-            numpy_img = cv2.resize(numpy_img, (256, 256), interpolation=cv2.INTER_AREA)
-            numpy_img = numpy_img[:, :, np.newaxis] # Changes image shape to (W, H, 1)
+            numpy_img = np.asarray(Image.open(path).convert('L')) # Use Pillow for TIF support
+            # numpy_img = cv2.resize(numpy_img, (256, 256), interpolation=cv2.INTER_AREA)
+            numpy_img = np.expand_dims(numpy_img, axis=2) # Changes image shape to (W, H, 1)
         arr = visualize(numpy_img).astype(np.float32)
 
         out_dict = {}
@@ -138,7 +137,7 @@ class ImageDataset(Dataset):
             out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
             out_dict["path"]=name
 
-        return np.transpose(arr, [2, 0, 1]), out_dict
+        return np.transpose(arr, [2, 0, 1]), out_dict # HWC -> CHW
 
 
 def center_crop_arr(pil_image, image_size):

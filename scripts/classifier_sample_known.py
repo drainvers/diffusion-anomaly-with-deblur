@@ -3,7 +3,7 @@ Generate a large batch of image samples from a model and save them as a large
 numpy array. This can be used to produce samples for FID evaluation.
 """
 import matplotlib.pyplot as plt
-import argparse
+import argparse, os
 from pathlib import Path
 from visdom import Visdom
 viz = Visdom(port=8850)
@@ -30,6 +30,7 @@ from guided_diffusion.script_util import (
 # Evaluation metrics
 from torcheval.metrics import PeakSignalNoiseRatio
 from torcheval.metrics import StructuralSimilarity
+from torcheval.metrics import FrechetInceptionDistance
 
 from sklearn.metrics import roc_auc_score
 from skimage.filters import threshold_otsu, threshold_mean
@@ -42,7 +43,12 @@ from torchvision.utils import draw_segmentation_masks, draw_bounding_boxes
 from torchvision.transforms.functional import to_pil_image
 from torchvision.ops import masks_to_boxes
 
-def smooth_segmentation(mask):
+def choose_sample_fn(diffusion_obj, use_ddim, use_ma_sampling):
+   if use_ddim:
+       if use_ma_sampling:
+           return
+       return diffusion_obj.ddim_sample_loop_known
+   
    pass
 
 def visualize(img):
@@ -58,7 +64,7 @@ def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure()
+    logger.configure(dir=args.result_dir)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
@@ -81,18 +87,13 @@ def main():
         batch_size=args.batch_size,
         image_size=args.image_size,
         class_cond=True,
+        deterministic=True
      )
      datal = iter(data)
    
     model.load_state_dict(
         dist_util.load_state_dict(args.model_path, map_location="cpu")
     )
-
-    # Load deblur checkpoint here
-    # For saving our generated images
-    result_dir = Path(f'results/{args.data_dir.split("/")[-1]}')
-    result_dir.mkdir(parents=True, exist_ok=True)
-    # End of deblur
 
     model.to(dist_util.dev())
     if args.use_fp16:
@@ -134,13 +135,19 @@ def main():
         return model(x, t, y if args.class_cond else None)
 
     logger.log("sampling...")
-    all_images = []
-    all_labels = []
+    all_orgs    = []
+    all_images  = []
+    all_labels  = []
+    all_names   = []
+    all_diffs   = []
 
-    for img in datal:
+    all_results = []
 
+    # for img in datal:
+    while len(all_images) * args.batch_size < args.num_samples:
         model_kwargs = {}
-     #   img = next(data)  # should return an image from the dataloader "data"
+        img = next(datal)
+        # img = next(data)  # should return an image from the dataloader "data"
         print('img', img[0].shape, img[1])
         if args.dataset=='brats':
             Labelmask = th.where(img[3] > 0, 1, 0)
@@ -210,78 +217,94 @@ def main():
             viz.image(colored_diff.transpose(2, 0, 1), opts=dict(caption=f'diff {img[1]["path"][0]}'))
 
             # Save image
-            heatmap_img = (colored_diff * 255).astype(np.uint8)
-            original_img = (np.concatenate((np.array(visualize(img[0][0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
+            original_img = (np.concatenate((np.array(visualize(org[0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
             sampled_img = (np.concatenate((np.array(visualize(sample[0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
+            heatmap_img = (colored_diff * 255).astype(np.uint8)
 
-            thresh = threshold_otsu(visualize(diff))
-            logger.log(f'threshold: {thresh}')
-            mask = th.where(th.tensor(visualize(diff)) > 0.5, 1, 0)  #this is our predicted binary segmentation
-            viz.image(visualize(mask), opts=dict(caption=f'mask {img[1]["path"][0]}'))
+            # thresh = threshold_otsu(visualize(diff))
+            # logger.log(f'threshold: {thresh}')
+            # mask = th.where(th.tensor(visualize(diff)) > 0.5, 1, 0)  #this is our predicted binary segmentation
+            # viz.image(visualize(mask), opts=dict(caption=f'mask {img[1]["path"][0]}'))
 
             # Convert mask to boxes
-            obj_ids = th.unique(mask)
-            obj_ids = obj_ids[1:]
-            masks = mask == obj_ids[:, None, None]
+            # obj_ids = th.unique(mask)
+            # obj_ids = obj_ids[1:]
+            # masks = mask == obj_ids[:, None, None]
 
-            boxes = masks_to_boxes(masks)
-            drawn_boxes = draw_bounding_boxes((img[0][0, ...] * 255).type(th.uint8).repeat(3, 1, 1), boxes, colors="red")
+            # boxes = masks_to_boxes(masks)
+            # drawn_boxes = draw_bounding_boxes((img[0][0, ...] * 255).type(th.uint8).repeat(3, 1, 1), boxes, colors="red")
             # fig, _ = show(drawn_boxes)
-            viz.image(drawn_boxes, opts=dict(caption=f'bbox {img[1]["path"][0]}'))
+            # viz.image(drawn_boxes, opts=dict(caption=f'bbox {img[1]["path"][0]}'))
 
             # Image.fromarray((np.array(visualize(mask).cpu()) * 255).astype(np.uint8)).save(f'results/{args.data_dir.split("/")[-1]}/mask_{img[1]["path"][0]}.png')
 
             # Image.fromarray(heatmap_img).save(f'results/heatmap_{img[1]["path"][0]}.png')
             # Image.fromarray(sampled_img).save(f'results/sampled_{img[1]["path"][0]}.png')
 
-            mask = (np.array(mask.cpu().repeat(3, 1, 1)).transpose(1, 2, 0) * 255).astype(np.uint8)
-            drawn_boxes = np.array(drawn_boxes.cpu()).transpose(1, 2, 0).astype(np.uint8)
+            # mask = (np.array(mask.cpu().repeat(3, 1, 1)).transpose(1, 2, 0) * 255).astype(np.uint8)
+            # drawn_boxes = np.array(drawn_boxes.cpu()).transpose(1, 2, 0).astype(np.uint8)
 
-            print(original_img.shape)
-            print(sampled_img.shape)
-            print(heatmap_img.shape)
-            print(mask.shape)
-            print(drawn_boxes.shape)
-
-            result = Image.fromarray(np.hstack([original_img,
-                                                sampled_img,
-                                                heatmap_img,
-                                                mask,
-                                                drawn_boxes]))
-            result.save(f'results/{args.data_dir.split("/")[-2]}/{img[1]["path"][0]}.png')
+            result = np.hstack([original_img,
+                                sampled_img,
+                                heatmap_img])
+            all_results.append(result)
+            all_names.append(img[1]["path"][0])
 
             # End of save image
-
-            psnr.reset()
-            ssim.reset()
-
-            print(org.shape, sample.shape)
             psnr.update(org, sample)
             ssim.update(org, sample)
-
-            logger.log(f'{img[1]["path"][0]} psnr, ssim: {psnr.compute()}, {ssim.compute()}')
-        
 
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
         all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
+
+        gathered_orgs = [th.zeros_like(org) for _ in range(dist.get_world_size())]
+        dist.all_gather(gathered_orgs, org)  # gather not supported with NCCL
+        all_orgs.extend([org.cpu().numpy() for org in gathered_orgs])
+
+        gathered_diffs = [th.zeros_like(diff) for _ in range(dist.get_world_size())]
+        dist.all_gather(gathered_diffs, diff)  # gather not supported with NCCL
+        all_diffs.extend([diff.cpu().numpy() for diff in gathered_diffs])
+
         if args.class_cond:
             gathered_labels = [
                 th.zeros_like(classes) for _ in range(dist.get_world_size())
             ]
             dist.all_gather(gathered_labels, classes)
             all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
-        
+        logger.log(f"created {len(all_images) * args.batch_size} samples")
 
     arr = np.concatenate(all_images, axis=0)
     arr = arr[: args.num_samples]
+
+    org_arr = np.concatenate(all_orgs, axis=0)
+    org_arr = org_arr[: args.num_samples]
+
+    diff_arr = np.concatenate(all_diffs, axis=0)
+    diff_arr = diff_arr[: args.num_samples]
+
     if args.class_cond:
         label_arr = np.concatenate(all_labels, axis=0)
         label_arr = label_arr[: args.num_samples]
+        
+        name_arr = np.array(all_names)
+        name_arr = name_arr[: args.num_samples]
     
+    if dist.get_rank() == 0:
+        os.makedirs(args.result_dir, exist_ok=True)
+        shape_str = "x".join([str(x) for x in arr.shape])
+        # out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
+        out_path = os.path.join(args.result_dir, f"samples_{os.path.splitext(os.path.basename(args.model_path))[0]}_{shape_str}.npz")
+        logger.log(f"saving to {out_path}")
+        np.savez(out_path, samples=arr, labels=label_arr, names=name_arr, orgs=org_arr, diffs=diff_arr)
+        
+        final_samples_image = Image.fromarray(np.vstack(all_results))
+        logger.log(f"saving generated sample images to {args.result_dir}")
+        final_samples_image.save(os.path.join(args.result_dir, f'latest_run_{os.path.splitext(os.path.basename(args.model_path))[0]}.png'))
 
     dist.barrier()
     logger.log("sampling complete")
+    logger.log(f"psnr: {psnr.compute()}, ssim: {ssim.compute()}")
 
 
 def create_argparser():
@@ -295,7 +318,9 @@ def create_argparser():
         classifier_path="",
         classifier_scale=100,
         noise_level=500,
-        dataset='brats'
+        dataset='brats',
+        result_dir='./results',
+        use_ma_sampling=False
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

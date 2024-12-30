@@ -2,7 +2,7 @@ import argparse
 import inspect
 
 from . import gaussian_diffusion as gd
-from .respace import SpacedDiffusion, space_timesteps
+from .respace import SpacedDiffusion, MASFDiffusion, space_timesteps
 from .unet import SuperResModel, UNetModel, EncoderUNetModel
 
 NUM_CLASSES = 2
@@ -21,7 +21,8 @@ def diffusion_defaults():
         predict_xstart=False,
         rescale_timesteps=False,
         rescale_learned_sigmas=False,
-        dataset='brats'
+        dataset='brats',
+        use_ma_sampling=False
     )
 
 
@@ -97,7 +98,8 @@ def create_model_and_diffusion(
     resblock_updown,
     use_fp16,
     use_new_attention_order,
-    dataset
+    dataset,
+    use_ma_sampling
 ):
     print('timestepresp1',timestep_respacing )
     model = create_model(
@@ -128,6 +130,7 @@ def create_model_and_diffusion(
         rescale_timesteps=rescale_timesteps,
         rescale_learned_sigmas=rescale_learned_sigmas,
         timestep_respacing=timestep_respacing,
+        use_ma_sampling=use_ma_sampling
     )
     return model, diffusion
 
@@ -215,6 +218,7 @@ def create_classifier_and_diffusion(
     rescale_timesteps,
     rescale_learned_sigmas,
     dataset,
+    use_ma_sampling
 ):
     print('timestepresp2', timestep_respacing)
     classifier = create_classifier(
@@ -237,6 +241,7 @@ def create_classifier_and_diffusion(
         rescale_timesteps=rescale_timesteps,
         rescale_learned_sigmas=rescale_learned_sigmas,
         timestep_respacing=timestep_respacing,
+        use_ma_sampling=use_ma_sampling
     )
     return classifier, diffusion
 
@@ -321,6 +326,7 @@ def sr_create_model_and_diffusion(
     use_scale_shift_norm,
     resblock_updown,
     use_fp16,
+    use_ma_sampling
 ):
     print('timestepresp3', timestep_respacing)
     model = sr_create_model(
@@ -349,6 +355,7 @@ def sr_create_model_and_diffusion(
         rescale_timesteps=rescale_timesteps,
         rescale_learned_sigmas=rescale_learned_sigmas,
         timestep_respacing=timestep_respacing,
+        use_ma_sampling=use_ma_sampling
     )
     return model, diffusion
 
@@ -416,6 +423,7 @@ def create_gaussian_diffusion(
     rescale_timesteps=False,
     rescale_learned_sigmas=False,
     timestep_respacing="",
+    use_ma_sampling=False
 ):
     betas = gd.get_named_beta_schedule(noise_schedule, steps)
     if use_kl:
@@ -427,7 +435,8 @@ def create_gaussian_diffusion(
     if not timestep_respacing:
         timestep_respacing = [steps]
     print('steps', steps, timestep_respacing)
-    return SpacedDiffusion(
+    DiffusionClass = MASFDiffusion if use_ma_sampling else SpacedDiffusion
+    return DiffusionClass(
         use_timesteps=space_timesteps(steps, timestep_respacing),
         betas=betas,
         model_mean_type=(
