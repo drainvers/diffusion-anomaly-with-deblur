@@ -26,14 +26,14 @@ def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure()
+    logger.configure(dir=args.result_dir)
 
     logger.log("creating model...")
     model, diffusion = sr_create_model_and_diffusion(
         **args_to_dict(args, sr_model_and_diffusion_defaults().keys())
     )
     model.to(dist_util.dev())
-    schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion)
+    schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion, maxt=1000)
 
     logger.log("creating data loader...")
     data = load_superres_data(
@@ -61,6 +61,7 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
+        dataset=args.dataset
     ).run_loop()
 
 
@@ -91,7 +92,8 @@ def create_argparser():
         resume_checkpoint="",
         use_fp16=False,
         fp16_scale_growth=1e-3,
-        result_dir='./results'
+        result_dir='./results',
+        dataset='chexpert'
     )
     defaults.update(sr_model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

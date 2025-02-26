@@ -257,7 +257,9 @@ def create_classifier(
     classifier_pool,
     dataset,
 ):
-    if image_size == 256:
+    if image_size == 512:
+        channel_mult = (1, 1, 2, 2, 4, 4)
+    elif image_size == 256:
         channel_mult = (1, 1, 2, 2, 4, 4)
     elif image_size == 128:
         channel_mult = (1, 1, 2, 3, 4)
@@ -326,6 +328,7 @@ def sr_create_model_and_diffusion(
     use_scale_shift_norm,
     resblock_updown,
     use_fp16,
+    dataset,
     use_ma_sampling
 ):
     print('timestepresp3', timestep_respacing)
@@ -345,6 +348,7 @@ def sr_create_model_and_diffusion(
         dropout=dropout,
         resblock_updown=resblock_updown,
         use_fp16=use_fp16,
+        dataset=dataset
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -376,6 +380,7 @@ def sr_create_model(
     dropout,
     resblock_updown,
     use_fp16,
+    dataset
 ):
     _ = small_size  # hack to prevent unused variable
 
@@ -391,12 +396,18 @@ def sr_create_model(
     attention_ds = []
     for res in attention_resolutions.split(","):
         attention_ds.append(large_size // int(res))
+    
+    if dataset=='brats':
+      number_in_channels=4
+    else:
+      number_in_channels=1
+    print('numberinchannels', number_in_channels)
 
     return SuperResModel(
         image_size=large_size,
-        in_channels=3,
+        in_channels=number_in_channels,
         model_channels=num_channels,
-        out_channels=(3 if not learn_sigma else 6),
+        out_channels=2*number_in_channels,#12,#(3 if not learn_sigma else 6),
         num_res_blocks=num_res_blocks,
         attention_resolutions=tuple(attention_ds),
         dropout=dropout,

@@ -43,7 +43,7 @@ def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure()
+    logger.configure(dir=args.result_dir)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_classifier_and_diffusion(
@@ -261,7 +261,8 @@ def create_argparser():
         log_interval=1,
         eval_interval=1000,
         save_interval=5000,
-        dataset='brats'
+        dataset='brats',
+        result_dir="./results"
     )
     defaults.update(classifier_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

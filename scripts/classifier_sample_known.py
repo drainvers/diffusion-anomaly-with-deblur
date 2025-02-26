@@ -118,7 +118,7 @@ def main():
     classifier.eval()
 
 
-    def cond_fn(x, t,  y=None):
+    def cond_fn(x, t, y=None):
         assert y is not None
         with th.enable_grad():
             x_in = x.detach().requires_grad_(True)
@@ -262,10 +262,6 @@ def main():
         dist.all_gather(gathered_orgs, org)  # gather not supported with NCCL
         all_orgs.extend([org.cpu().numpy() for org in gathered_orgs])
 
-        gathered_diffs = [th.zeros_like(diff) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_diffs, diff)  # gather not supported with NCCL
-        all_diffs.extend([diff.cpu().numpy() for diff in gathered_diffs])
-
         if args.class_cond:
             gathered_labels = [
                 th.zeros_like(classes) for _ in range(dist.get_world_size())
@@ -280,9 +276,6 @@ def main():
     org_arr = np.concatenate(all_orgs, axis=0)
     org_arr = org_arr[: args.num_samples]
 
-    diff_arr = np.concatenate(all_diffs, axis=0)
-    diff_arr = diff_arr[: args.num_samples]
-
     if args.class_cond:
         label_arr = np.concatenate(all_labels, axis=0)
         label_arr = label_arr[: args.num_samples]
@@ -296,7 +289,7 @@ def main():
         # out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
         out_path = os.path.join(args.result_dir, f"samples_{os.path.splitext(os.path.basename(args.model_path))[0]}_{shape_str}.npz")
         logger.log(f"saving to {out_path}")
-        np.savez(out_path, samples=arr, labels=label_arr, names=name_arr, orgs=org_arr, diffs=diff_arr)
+        np.savez(out_path, samples=arr, labels=label_arr, names=name_arr, orgs=org_arr)
         
         final_samples_image = Image.fromarray(np.vstack(all_results))
         logger.log(f"saving generated sample images to {args.result_dir}")

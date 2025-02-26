@@ -434,10 +434,11 @@ class GaussianDiffusion:
         )
         return out, cfn
 
-    def sample_known(self, model, img, batch_size = 1):
+    def sample_known(self, model, img, use_ddim = False, batch_size = 1):
         image_size = self.image_size
         channels = self.channels
-        return self.p_sample_loop_known(model,(batch_size, channels, image_size, image_size), img)
+        sample_fn = self.ddim_sample_loop_known if use_ddim else self.p_sample_loop_known
+        return sample_fn(model,(batch_size, channels, image_size, image_size), img)
 
 
     def p_sample_loop(
@@ -668,25 +669,22 @@ class GaussianDiffusion:
         
           
         for i in indices:
-                t = th.tensor([i] * shape[0], device=device)
+            t = th.tensor([i] * shape[0], device=device)
+            with th.no_grad():
+                out = self.p_sample(
+                    model,
+                    img,
+                    t,
+                    clip_denoised=clip_denoised,
+                    denoised_fn=denoised_fn,
+                    cond_fn=cond_fn,
+                    model_kwargs=model_kwargs,
+                )
+                yield out
+                img = out["sample"]
 
-                with th.no_grad():
-                    
-                   
-                    out = self.p_sample(
-                        model,
-                        img,
-                        t,
-                        clip_denoised=clip_denoised,
-                        denoised_fn=denoised_fn,
-                        cond_fn=cond_fn,
-                        model_kwargs=model_kwargs,
-                    )
-                    yield out
-                    img = out["sample"]
-
-                    if i%100==0:
-                     print('i', i)
+                if i % 100 == 0:
+                    print('i', i)
                     #  viz.image(visualize(img[0,0,...]), opts=dict(caption=str(i)))
                     #  viz.image(visualize(img[0, 1,...]), opts=dict(caption=str(i)))
                     #  viz.image(visualize(img[0, 2,...]), opts=dict(caption=str(i)))
@@ -721,6 +719,8 @@ class GaussianDiffusion:
 
         if cond_fn is not None:
             out, saliency = self.condition_score(cond_fn, out, x, t, model_kwargs=model_kwargs)
+        else:
+            saliency = th.zeros_like(x)
         # Usually our model outputs epsilon, but we re-derive it
         # in case we used x_start or x_prev prediction.
         eps = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
@@ -869,7 +869,60 @@ class GaussianDiffusion:
         # viz.image(visualize(final["sample"].cpu()[0, ...]), opts=dict(caption="sample"+ str(10) ))
         return final["sample"]
 
+    def ddim_sample_loop_progressive(
+        self,
+        model,
+        shape,
+        time=1000,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        org=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+        eta=0.0,
+    ):
+        """
+        Use DDIM to sample from the model and yield intermediate samples from
+        each timestep of DDIM.
 
+        Same usage as p_sample_loop_progressive().
+        """
+        if device is None:
+            device = next(model.parameters()).device
+        assert isinstance(shape, (tuple, list))
+        if noise is not None:
+            img = noise
+        else:
+            img = th.randn(*shape, device=device)
+        indices = list(range(self.num_timesteps))[::-1]
+
+        if progress:
+            # Lazy import so that we don't depend on tqdm.
+            from tqdm.auto import tqdm
+
+            indices = tqdm(indices)
+
+        for i in indices:
+            t = th.tensor([i] * shape[0], device=device)
+            with th.no_grad():
+                out = self.ddim_sample(
+                    model,
+                    img,
+                    t,
+                    clip_denoised=clip_denoised,
+                    denoised_fn=denoised_fn,
+                    cond_fn=cond_fn,
+                    model_kwargs=model_kwargs,
+                    eta=eta,
+                )
+                yield out
+                img = out["sample"]
+
+                if i % 100 == 0:
+                    print('i', i)
 
     def ddim_sample_loop_known(
             self,
@@ -904,7 +957,7 @@ class GaussianDiffusion:
         print('xnoisy', x_noisy.shape)
 
         final = None
-        for sample in self.ddim_sample_loop_progressive(
+        for sample in self.ddim_sample_loop_known_progressive(
             model,
             shape,
             time=noise_level,
@@ -918,17 +971,17 @@ class GaussianDiffusion:
             eta=eta,
         ):
             final = sample
-        # viz.image(visualize(final["sample"].cpu()[0,0, ...]), opts=dict(caption="final 0" ))
-        # Comment the following three lines if running with CheXpert
-        # viz.image(visualize(final["sample"].cpu()[0,1, ...]), opts=dict(caption="final 1" ))
-        # viz.image(visualize(final["sample"].cpu()[0,2, ...]), opts=dict(caption="final 2" ))
-        # viz.image(visualize(final["sample"].cpu()[0,3, ...]), opts=dict(caption="final 3" ))
+            # viz.image(visualize(final["sample"].cpu()[0,0, ...]), opts=dict(caption="final 0" ))
+            # Comment the following three lines if running with CheXpert
+            # viz.image(visualize(final["sample"].cpu()[0,1, ...]), opts=dict(caption="final 1" ))
+            # viz.image(visualize(final["sample"].cpu()[0,2, ...]), opts=dict(caption="final 2" ))
+            # viz.image(visualize(final["sample"].cpu()[0,3, ...]), opts=dict(caption="final 3" ))
 
 
         return final["sample"], x_noisy, img
 
 
-    def ddim_sample_loop_progressive(
+    def ddim_sample_loop_known_progressive(
         self,
         model,
         shape,
@@ -965,14 +1018,12 @@ class GaussianDiffusion:
             indices = tqdm(indices)
 
         for i in indices:
-
             k=abs(time-1-i)
-            if k%20==0:
-                print('k',k)
+            if k % 20 == 0:
+                print('k', k)
 
             t = th.tensor([k] * shape[0], device=device)
             with th.no_grad():
-
                 out = self.ddim_reverse_sample(
                     model,
                     img,
@@ -982,27 +1033,29 @@ class GaussianDiffusion:
                     model_kwargs=model_kwargs,
                     eta=eta,
                 )
-
                 yield out
                 img = out["sample"]
 
         # viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="reversesample"))
         for i in indices:
-                t = th.tensor([i] * shape[0], device=device)
-                with th.no_grad():
-                 out = self.ddim_sample(
-                    model,
-                    img,
-                    t,
-                    clip_denoised=clip_denoised,
-                    denoised_fn=denoised_fn,
-                    cond_fn=cond_fn,
-                    model_kwargs=model_kwargs,
-                    eta=eta,
-                 )
-                yield out
-                img = out["sample"]
-                saliency=out['saliency']
+            t = th.tensor([i] * shape[0], device=device)
+            with th.no_grad():
+                out = self.ddim_sample(
+                model,
+                img,
+                t,
+                clip_denoised=clip_denoised,
+                denoised_fn=denoised_fn,
+                cond_fn=cond_fn,
+                model_kwargs=model_kwargs,
+                eta=eta,
+                )
+            yield out
+            img = out["sample"]
+            saliency=out['saliency']
+
+            if i % 20 == 0:
+                print('i', i)
 
     def _vb_terms_bpd(
         self, model, x_start, x_t, t, clip_denoised=True, model_kwargs=None

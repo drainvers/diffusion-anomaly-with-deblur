@@ -135,7 +135,7 @@ class ImageDataset(Dataset):
         out_dict = {}
         if self.local_classes is not None:
             out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
-            out_dict["path"]=name
+            out_dict["path"] = name
 
         return np.transpose(arr, [2, 0, 1]), out_dict # HWC -> CHW
 

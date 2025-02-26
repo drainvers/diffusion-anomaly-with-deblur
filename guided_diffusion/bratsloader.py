@@ -4,22 +4,102 @@ import numpy as np
 import os
 import os.path
 import nibabel
+import pandas as pd
 from scipy import ndimage
+from PIL import Image
 
-'''
-class VinDRDataset(torch.utils.data.Dataset):
-    def __init__(self, directory, test_flag=False):
-        self.directory = os.path.expanduser(directory)
+def visualize(img):
+    _min = img.min()
+    _max = img.max()
+    normalized_img = (img - _min)/ (_max - _min)
+    return normalized_img
+
+class ChexpertDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        root_directory,
+        class_cond=True,
+        test_flag=False,
+        data_filter="frontal_only",
+        sample_n=None,
+        transform=None
+    ):
+        if not root_directory:
+            raise ValueError("unspecified data directory")
+        self.directory = os.path.expanduser(root_directory)
         self.test_flag = test_flag
-        self.database = []
-        pass
+        self.class_cond = class_cond
+        self.annotations_path = os.path.join(self.directory,
+                                             "valid.csv"
+                                             if self.test_flag else
+                                             "train.csv")
+        self.transform = transform
 
-    def __getitem__(self, x):
-        pass
+        # Filtering logic
+        df_annotations = pd.read_csv(self.annotations_path)
+
+        if data_filter == "frontal_only":
+            df_annotations = df_annotations[(df_annotations["Frontal/Lateral"] == "Frontal")].copy(deep=True)
+
+        self.local_classes = None
+        if class_cond:
+            # Generate labels for healthy images and images with pleural effusions
+            df_annotations.loc[(df_annotations["No Finding"] == 1), 'Label'] = 1 # Healthy
+            df_annotations.loc[(df_annotations["Pleural Effusion"] == 1), 'Label'] = 0 # Diseased
+            df_annotations = df_annotations[df_annotations['Label'].isin([0, 1])].copy(deep=True)
+
+            # Sample from pleural effusion images to lower imbalance
+            if sample_n:
+                df_annotations_healthy = df_annotations[(df_annotations["No Finding"] == 1)].sample(n=sample_n, random_state=1911)
+                df_annotations_diseased = df_annotations[(df_annotations["Pleural Effusion"] == 1)].sample(n=sample_n, random_state=1911)
+                df_annotations = pd.concat([df_annotations_diseased, df_annotations_healthy]).copy(deep=True)
+
+            self.local_classes = df_annotations['Label'].to_list()
+        
+        df_annotations['Path'] = df_annotations['Path'].apply(
+                                    lambda path: os.path.join(
+                                        self.directory, 
+                                        os.sep.join(path.split(os.sep)[1:]))).astype(str)
+        self.local_images = df_annotations['Path'].to_list()
+
+        if class_cond:
+            assert len(self.local_images) == len(self.local_classes)
+
+    def __getitem__(self, idx):
+        path = self.local_images[idx]
+        basename, ext = os.path.splitext(os.path.basename(path))
+        fullname = '_'.join(os.path.normpath(path).split(os.sep)[-3:-1])
+        name = '_'.join([fullname, basename])
+
+        # Readds ability to read known image formats, taken from upstream guided diffusion repo
+        if ext == '.npy':
+            out_img = np.load(path)
+        else:
+            out_img = np.asarray(Image.open(path).convert('L')) # Use Pillow for TIF support
+            out_img = np.expand_dims(out_img, axis=2) # Changes image shape to (H, W, 1)
+        
+        out_img = visualize(out_img).astype(np.float32)
+        out_img = np.transpose(out_img, [2, 0, 1]) # HWC -> CHW
+
+        out_dict = {}
+        if self.local_classes:
+            out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
+            out_dict["name"] = name
+        
+        if self.transform:
+            out_img = self.transform(out_img)
+
+        return out_img, out_dict
+    
+    def summarize(self):
+        print('n_images  :', len(self.local_images))
+        if self.class_cond:
+            print('n_labels  :', len(self.local_classes))
+            print('n_healthy :', int(sum(self.local_classes)))
+            print('n_diseased:', len(self.local_classes) - int(sum(self.local_classes)))
 
     def __len__(self):
-        return len(self.database)
-'''
+        return len(self.local_images)
 
 class BRATSDataset(torch.utils.data.Dataset):
     def __init__(self, directory, test_flag=False):
@@ -95,5 +175,33 @@ class BRATSDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.database)
 
+def preview_dataset(ds, nrow, ncol):
+    fig = plt.subplots(figsize=(nrow * 2.56, ncol * 2.56), dpi=100, layout='tight')
+    gs = gridspec.GridSpec(nrow, ncol, wspace=0.0, hspace=0.0)
 
+    for row in range(nrow):
+        for col in range(ncol):
+            im, out_dict = ds[ncol * row + col]
+            ax = plt.subplot(gs[row, col])
+            ax.imshow(np.transpose(im, [1, 2, 0]), cmap='gray', aspect='auto')
+            ax.set_xticklabels([])
+            ax.set_yticklabels([])
+            ax.tick_params(top=False, right=False, bottom=False, left=False, pad=0)
+            ax.set(frame_on=False)
+            if row == 0:
+                ax.set_xlabel(out_dict['name'][:-8])
+                ax.xaxis.set_label_position('top')
+            if col == 0:
+                ax.set_ylabel(out_dict['name'][:-8], wrap=True)
+                ax.yaxis.set_label_position('left')
+    
+    plt.tight_layout(pad=1)
+    plt.savefig('./chexpert_sample.png', dpi=100)
 
+if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+    from matplotlib import gridspec
+
+    train_ds = ChexpertDataset('/workspace/CheXpert-v1.0', test_flag=False, sample_n=16000)
+    preview_dataset(train_ds, 3, 3)
+    train_ds.summarize()
