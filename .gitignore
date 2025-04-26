@@ -6,6 +6,6 @@ DiffPIR/*
 data/*
 
 scripts/chexpert_preproc.py
-scripts/classifier_sample_deblur.py
+scripts/classifier_sample_sr_2x.py
 scripts/convert_to_npy.py
 

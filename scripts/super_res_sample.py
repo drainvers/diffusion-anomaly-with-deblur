@@ -114,8 +114,6 @@ def load_superres_data_sample(data_dir, batch_size, small_size, class_cond=False
     for small_batch, model_kwargs in data:
         batch = small_batch * 2.0 - 1.0 # Make [0., 1.] -> [-1., 1.]
         res = dict(low_res=batch)
-        print(res["low_res"].dtype)
-        print(res["low_res"])
         if class_cond:
             res["y"] = model_kwargs["y"]
             res["path"] = model_kwargs["path"]

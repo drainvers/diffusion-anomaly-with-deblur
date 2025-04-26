@@ -104,7 +104,7 @@ class TrainLoop:
                 device_ids=[dist_util.dev()],
                 output_device=dist_util.dev(),
                 broadcast_buffers=False,
-                bucket_cap_mb=128,
+                bucket_cap_mb=64,
                 find_unused_parameters=False,
             )
         else:
@@ -174,8 +174,12 @@ class TrainLoop:
                     self.iterdatal = iter(self.datal)
                     batch, cond, label, _, _ = next(self.iterdatal)
             elif self.dataset=='chexpert':
-                batch, cond = next(self.iterdatal)
-                cond.pop("path", None)
+                try:
+                    batch, cond = next(self.iterdatal)
+                except:
+                    self.iterdatal = iter(self.datal)
+                    batch, cond = next(self.iterdatal)
+                cond.pop("name", None)
 
             self.run_step(batch, cond)
 
