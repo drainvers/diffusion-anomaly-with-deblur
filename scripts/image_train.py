@@ -4,9 +4,10 @@ Train a diffusion model on images.
 import sys
 import argparse
 import torch as th
+import numpy as np
 sys.path.append("..")
 sys.path.append(".")
-from guided_diffusion.bratsloader import BRATSDataset
+from guided_diffusion.bratsloader import BRATSDataset, ChexpertDataset
 from guided_diffusion import dist_util, logger
 from guided_diffusion.image_datasets import load_data
 from guided_diffusion.resample import create_named_schedule_sampler
@@ -33,6 +34,10 @@ def main():
     model.to(dist_util.dev())
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion,  maxt=1000)
 
+    p1 = np.array([np.array(p.shape).prod() for p in model.parameters()]).sum()
+    print('pmodel', p1)
+    logger.log('pmodel', p1)
+
     logger.log("creating data loader...")
 
     if args.dataset == 'brats':
@@ -43,12 +48,19 @@ def main():
             shuffle=True)
 
     elif args.dataset == 'chexpert':
-        datal = load_data(
-            data_dir=args.data_dir,
+        ds = ChexpertDataset(args.data_dir, class_cond=True, test_flag=False, sample_n=20000)
+        datal = th.utils.data.DataLoader(
+            ds,
             batch_size=args.batch_size,
-            image_size=args.image_size,
-            class_cond=True,
-        )
+            shuffle=True)
+        ds.summarize()
+        print(len(datal))
+        # datal = load_data(
+        #     data_dir=args.data_dir,
+        #     batch_size=args.batch_size,
+        #     image_size=args.image_size,
+        #     class_cond=True,
+        # )
         print('dataset is chexpert')
 
     logger.log("training...")

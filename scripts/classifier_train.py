@@ -8,7 +8,7 @@ import sys
 from torch.autograd import Variable
 sys.path.append("..")
 sys.path.append(".")
-from guided_diffusion.bratsloader import BRATSDataset
+from guided_diffusion.bratsloader import BRATSDataset, ChexpertDataset
 import blobfile as bf
 import torch as th
 os.environ['OMP_NUM_THREADS'] = '8'
@@ -43,7 +43,7 @@ def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure(dir=args.result_dir)
+    logger.configure(dir=args.result_dir, log_suffix="class")
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_classifier_and_diffusion(
@@ -54,6 +54,10 @@ def main():
         schedule_sampler = create_named_schedule_sampler(
             args.schedule_sampler, diffusion, maxt=1000
         )
+    
+    p1 = np.array([np.array(p.shape).prod() for p in model.parameters()]).sum()
+    print('pclass', p1)
+    logger.log('pclass', p1)
 
     resume_step = 0
     if args.resume_checkpoint:
@@ -86,14 +90,39 @@ def main():
         data = iter(datal)
 
     elif args.dataset == 'chexpert':
-        datal = load_data(
-            data_dir=args.data_dir,
+        ds = ChexpertDataset(args.data_dir, class_cond=True, test_flag=False, sample_n=20000)
+        datal = th.utils.data.DataLoader(
+            ds,
             batch_size=args.batch_size,
-            image_size=args.image_size,
-            class_cond=True,
-        )
+            shuffle=True)
         data = iter(datal)
+        
+        if args.val_data_dir != "":
+            val_ds = ChexpertDataset(args.data_dir, class_cond=True, test_flag=True)
+            val_datal = th.utils.data.DataLoader(
+                val_ds,
+                batch_size=args.batch_size,
+                shuffle=True)
+            val_data = iter(val_datal)
+
+        # datal = load_data(
+        #     data_dir=args.data_dir,
+        #     batch_size=args.batch_size,
+        #     image_size=args.image_size,
+        #     class_cond=True,
+        # )
+        # data = iter(datal)
+
+        # if args.val_data_dir != "":
+        #     val_datal = load_data(
+        #         data_dir=args.val_data_dir,
+        #         batch_size=args.batch_size,
+        #         image_size=args.image_size,
+        #         class_cond=True,
+        #     )
+        #     val_data = iter(val_datal)
         print('dataset is chexpert')
+        print(ds.summarize())
 
 
     logger.log(f"creating optimizer...")
@@ -149,6 +178,7 @@ def main():
             log_loss_dict(diffusion, sub_t, losses)
 
             loss = loss.mean()
+
             if prefix=="train":
                 viz.line(X=th.ones((1, 1)).cpu() * step, Y=th.Tensor([loss]).unsqueeze(0).cpu(),
                     win=loss_window, name='loss_cls',
@@ -166,6 +196,10 @@ def main():
                 viz.image(visualize(sub_batch[0, 0,...]))
                 # viz.image(visualize(sub_batch[0, 1, ...]))
                 th.cuda.empty_cache()
+
+                viz.line(X=th.ones((1, 1)).cpu() * step, Y=th.Tensor([loss]).unsqueeze(0).cpu(),
+                    win=val_window, name='val_loss_cls',
+                    update='append')
 
 
             if loss.requires_grad and prefix=="train":
@@ -191,15 +225,28 @@ def main():
             data = iter(datal)
             losses = forward_backward_log(data, step + resume_step)
 
-        correct+=losses["train_acc@1"].sum()
-        total+=args.batch_size
-        acctrain=correct/total
+        correct += losses["train_acc@1"].sum()
+        total += args.batch_size
+        acctrain = correct/total
+
+        viz.line(X=th.ones((1, 1)).cpu() * step, Y=th.Tensor([acctrain]).unsqueeze(0).cpu(),
+                    win=acc_window, name='acc_cls',
+                    update='append')
 
         mp_trainer.optimize(opt)
 
+        # if not step % args.eval_interval:
+        #     if val_data is not None:
+        #         with th.no_grad():
+        #             with model.no_sync():
+        #                 model.eval()
+        #                 forward_backward_log(val_data, prefix="val")
+        #                 model.train()
+
+        #     logger.dumpkvs()
+
         if not step % args.log_interval:
             logger.dumpkvs()
-
         if (
             step
             and dist.get_rank() == 0
@@ -258,11 +305,11 @@ def create_argparser():
         microbatch=-1,
         schedule_sampler="uniform",
         resume_checkpoint="",
-        log_interval=1,
+        log_interval=100,
         eval_interval=1000,
         save_interval=5000,
         dataset='brats',
-        result_dir="./results"
+        result_dir='./results'
     )
     defaults.update(classifier_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

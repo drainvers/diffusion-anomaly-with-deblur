@@ -7,6 +7,7 @@ import nibabel
 import pandas as pd
 from scipy import ndimage
 from PIL import Image
+from textwrap import wrap
 
 def visualize(img):
     _min = img.min()
@@ -20,9 +21,11 @@ class ChexpertDataset(torch.utils.data.Dataset):
         root_directory,
         class_cond=True,
         test_flag=False,
-        data_filter="frontal_only",
         sample_n=None,
-        transform=None
+        transform=None,
+        data_filter=None,
+        frontal_mode="both",
+        unique_patients_only=False
     ):
         if not root_directory:
             raise ValueError("unspecified data directory")
@@ -40,6 +43,10 @@ class ChexpertDataset(torch.utils.data.Dataset):
 
         if data_filter == "frontal_only":
             df_annotations = df_annotations[(df_annotations["Frontal/Lateral"] == "Frontal")].copy(deep=True)
+            if frontal_mode == "ap":
+                df_annotations = df_annotations[(df_annotations["AP/PA"] == "AP")].copy(deep=True)
+            elif frontal_mode == "pa":
+                df_annotations = df_annotations[(df_annotations["AP/PA"] == "PA")].copy(deep=True)
 
         self.local_classes = None
         if class_cond:
@@ -48,11 +55,21 @@ class ChexpertDataset(torch.utils.data.Dataset):
             df_annotations.loc[(df_annotations["Pleural Effusion"] == 1), 'Label'] = 0 # Diseased
             df_annotations = df_annotations[df_annotations['Label'].isin([0, 1])].copy(deep=True)
 
+            df_annotations_healthy = df_annotations[(df_annotations["Label"] == 1)]
+            df_annotations_diseased = df_annotations[(df_annotations["Label"] == 0)]
+
+            if unique_patients_only:
+                df_annotations_healthy = self._clean_df(df_annotations_healthy)
+                df_annotations_diseased = self._clean_df(df_annotations_diseased)
+
             # Sample from pleural effusion images to lower imbalance
             if sample_n:
-                df_annotations_healthy = df_annotations[(df_annotations["No Finding"] == 1)].sample(n=sample_n, random_state=1911)
-                df_annotations_diseased = df_annotations[(df_annotations["Pleural Effusion"] == 1)].sample(n=sample_n, random_state=1911)
-                df_annotations = pd.concat([df_annotations_diseased, df_annotations_healthy]).copy(deep=True)
+                if len(df_annotations_healthy.index) > sample_n:
+                    df_annotations_healthy = df_annotations_healthy.sample(n=sample_n, random_state=1911)
+                if len(df_annotations_diseased.index) > sample_n:
+                    df_annotations_diseased = df_annotations_diseased.sample(n=sample_n, random_state=1911)
+
+            df_annotations = pd.concat([df_annotations_diseased, df_annotations_healthy]).copy(deep=True)
 
             self.local_classes = df_annotations['Label'].to_list()
         
@@ -68,8 +85,8 @@ class ChexpertDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         path = self.local_images[idx]
         basename, ext = os.path.splitext(os.path.basename(path))
-        fullname = '_'.join(os.path.normpath(path).split(os.sep)[-3:-1])
-        name = '_'.join([fullname, basename])
+        name = basename
+        print(name)
 
         # Readds ability to read known image formats, taken from upstream guided diffusion repo
         if ext == '.npy':
@@ -97,6 +114,11 @@ class ChexpertDataset(torch.utils.data.Dataset):
             print('n_labels  :', len(self.local_classes))
             print('n_healthy :', int(sum(self.local_classes)))
             print('n_diseased:', len(self.local_classes) - int(sum(self.local_classes)))
+    
+    def _clean_df(self, input_df):
+        # Do NOT use first(), it will return the first non-NaN value, use nth to get values as-is
+        input_df.loc[:, 'Patient ID'] = input_df['Path'].map(lambda x: os.path.basename(x).split('_')[0])
+        return input_df.groupby('Patient ID').nth(0).reset_index(drop=True)
 
     def __len__(self):
         return len(self.local_images)
@@ -189,10 +211,10 @@ def preview_dataset(ds, nrow, ncol):
             ax.tick_params(top=False, right=False, bottom=False, left=False, pad=0)
             ax.set(frame_on=False)
             if row == 0:
-                ax.set_xlabel(out_dict['name'][:-8])
+                ax.set_xlabel('\n'.join(wrap(out_dict['name'], 20)))
                 ax.xaxis.set_label_position('top')
             if col == 0:
-                ax.set_ylabel(out_dict['name'][:-8], wrap=True)
+                ax.set_ylabel('\n'.join(wrap(out_dict['name'], 20)), wrap=True)
                 ax.yaxis.set_label_position('left')
     
     plt.tight_layout(pad=1)
@@ -202,6 +224,11 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from matplotlib import gridspec
 
-    train_ds = ChexpertDataset('/workspace/CheXpert-v1.0', test_flag=False, sample_n=16000)
-    preview_dataset(train_ds, 3, 3)
+    train_ds = ChexpertDataset('/workspace/CheXpert-v1.0', test_flag=False, sample_n=20000)
+    # preview_dataset(train_ds, 3, 3)
     train_ds.summarize()
+    datal = torch.utils.data.DataLoader(
+            train_ds,
+            batch_size=4,
+            shuffle=True)
+    print(len(datal) * 4)

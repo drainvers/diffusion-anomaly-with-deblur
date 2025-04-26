@@ -12,7 +12,6 @@ from .train_util import visualize
 from visdom import Visdom
 viz = Visdom(port=8850)
 from scipy import ndimage
-import cv2
 
 
 def load_data(
@@ -53,16 +52,13 @@ def load_data(
         # Assume classes are the first part of the filename,
         # before an underscore.
 
-        class_names =[path.split("/")[3] for path in all_files] #9 or 3
-        print('classnames', class_names)
-
-
+        class_names =[path.split("/")[-2] for path in all_files] #9 or 3
         sorted_classes = {x: i for i, x in enumerate(sorted(set(class_names)))}
         classes = [sorted_classes[x] for x in class_names]
 
     dataset = ImageDataset(
         image_size,
-        data_dir,
+        all_files,
         classes=classes,
         shard=0,
         num_shards=1,
@@ -103,12 +99,11 @@ class ImageDataset(Dataset):
         shard=0,
         num_shards=1,
         random_crop=False,
-        random_flip=False,
-        exts=['jpg', 'jpeg', 'png', 'tiff', 'tif', 'npy']
+        random_flip=False
     ):
         super().__init__()
         self.resolution = resolution
-        self.local_images = [p for ext in exts for p in Path(f'{image_paths}').glob(f'**/*.{ext}')]
+        self.local_images = image_paths[shard:][::num_shards]
         self.local_classes = None if classes is None else classes[shard:][::num_shards]
         self.random_crop = random_crop
         self.random_flip = random_flip
@@ -121,7 +116,7 @@ class ImageDataset(Dataset):
         path = self.local_images[idx]
         # name=str(path).split("/")[-1].split(".")[0]
         name, ext = os.path.splitext(os.path.basename(path))
-        print('path', name)
+        print('name', name)
 
         # Readds ability to read known image formats, taken from upstream guided diffusion repo
         if ext == '.npy':
@@ -135,7 +130,7 @@ class ImageDataset(Dataset):
         out_dict = {}
         if self.local_classes is not None:
             out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
-            out_dict["path"] = name
+            out_dict["name"]=name
 
         return np.transpose(arr, [2, 0, 1]), out_dict # HWC -> CHW
 
