@@ -53,7 +53,10 @@ def load_data(
         # before an underscore.
 
         class_names =[path.split("/")[-2] for path in all_files] #9 or 3
-        sorted_classes = {x: i for i, x in enumerate(sorted(set(class_names)))}
+        sorted_classes = {x: i for i, x in enumerate(sorted(set(class_names), reverse=True))}
+        if len(sorted_classes) == 1 and sorted_classes.get('diseased') == 0:
+                sorted_classes['diseased'] = 1
+        print('sorted_classes', sorted_classes)
         classes = [sorted_classes[x] for x in class_names]
 
     dataset = ImageDataset(

@@ -2,17 +2,18 @@ import sys
 sys.path.append("..")
 sys.path.append(".")
 
-from sklearn.metrics import roc_auc_score
 import matplotlib.pyplot as plt
-from matplotlib import gridspec
 import numpy as np
 import torch as th
+import cv2, os, csv, argparse
+
+from sklearn.metrics import roc_auc_score
+from matplotlib import gridspec
 from skimage.filters import threshold_otsu
-import cv2, os
 from PIL import Image, ImageDraw
-from visdom import Visdom
-viz = Visdom(port=8850)
-import argparse
+# from visdom import Visdom
+# viz = Visdom(port=8850)
+
 from skimage import segmentation
 # from guided_diffusion.script_util import add_dict_to_argparser
 
@@ -20,6 +21,19 @@ from skimage import segmentation
 from torcheval.metrics import PeakSignalNoiseRatio
 from torcheval.metrics import StructuralSimilarity
 from torcheval.metrics import FrechetInceptionDistance
+
+def str2bool(v):
+    """
+    https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
+    """
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("boolean value expected")
 
 def visualize(img):
     _min = img.min()
@@ -32,7 +46,7 @@ def dice_score(pred, targs):
     return 2. * (pred * targs).sum() / (pred + targs).sum()
 
 def load_samples(npz_path):
-    samples_npz = np.load(npz_path)
+    samples_npz = np.load(npz_path, allow_pickle=True)
     sorting_indices = np.argsort(samples_npz.f.names)
 
     data = {
@@ -51,7 +65,7 @@ def rescale_image(image, scale_factor):
     image = image.transpose(2, 0, 1)
     return image
 
-def calculate_metric_scores(input_images, target_images, names, mask_threshold=np.nan):
+def calculate_metric_scores(input_images, target_images, names, include_iou=False):
     '''
     Inputs:
     - input_images: A Tensor of size (N, C, H, W), C assumed to be 1
@@ -66,26 +80,33 @@ def calculate_metric_scores(input_images, target_images, names, mask_threshold=n
     fid.update(th.from_numpy(np.repeat(input_images, 3, axis=1).clip(0, 1)), True) # FID requires pixel values to be [0,1] and have 3 channels
     fid.update(th.from_numpy(np.repeat(target_images, 3, axis=1).clip(0, 1)), False) # FID requires pixel values to be [0,1] and have 3 channels
 
-    pred_masks, gt_masks = create_mask_batch(input_images, target_images, names, args.gt_mask_path, args.pred_mask_threshold)
-    ious = []
-    conf_matrix = dict(TP=0, TN=0, FP=0, FN=0)
+    if include_iou:
+        pred_masks, gt_masks = create_mask_batch(input_images, target_images, names, args.gt_mask_path, args.pred_mask_threshold)
+        ious = []
+        conf_matrix = dict(TP=0, TN=0, FP=0, FN=0)
 
-    for pred_mask, gt_mask in zip(list(pred_masks), list(gt_masks)):
-        ious.append(calculate_iou(pred_mask, gt_mask))
-        curr_matrix = get_conf_matrix(pred_mask, gt_mask)
-        for key in conf_matrix.keys():
-            conf_matrix[key] += curr_matrix[key]
+        for pred_mask, gt_mask in zip(list(pred_masks), list(gt_masks)):
+            ious.append(calculate_iou(pred_mask, gt_mask))
+            curr_matrix = get_conf_matrix(pred_mask, gt_mask)
+            for key in conf_matrix.keys():
+                conf_matrix[key] += curr_matrix[key]
 
-    ious = np.array(ious)
-    _, _, specificity = calculate_precision_recall_specificity(conf_matrix)
+        ious = np.array(ious)
+        _, _, specificity = calculate_precision_recall_specificity(conf_matrix)
+
+        return dict(
+            psnr=psnr.compute(),
+            ssim=ssim.compute(),
+            fid=fid.compute(),
+            miou=np.nanmean(ious),
+            specificity=specificity
+            )
 
     return dict(
-        psnr=psnr.compute(),
-        ssim=ssim.compute(),
-        fid=fid.compute(),
-        miou=np.nanmean(ious),
-        specificity=specificity
-        )
+            psnr=psnr.compute(),
+            ssim=ssim.compute(),
+            fid=fid.compute(),
+            )
 
 def cam_to_segmentation(cam_mask, threshold=np.nan, smoothing=False, k=0):
     """
@@ -372,7 +393,7 @@ DSC=dice_score(mask.cpu(), Labelmask_GT.cpu()) #predicted Dice score
 auc = roc_auc_score(pixel_wise_gt, pixel_wise_cls)
 '''
 
-def generate_grid_for_mpl(npz_paths, dest_path='', x_labels=None):
+def generate_grid_for_mpl(npz_paths, dest_path='', x_labels=None, generate_masks=False):
     master_image = None
     master_samples = []
     master_diffs = []
@@ -381,7 +402,10 @@ def generate_grid_for_mpl(npz_paths, dest_path='', x_labels=None):
     img_grid = []
     y_labels = None
     y_label_colors = None
-    col_attr_length = len(npz_paths) * 3 + 1
+    if generate_masks:
+        col_attr_length = len(npz_paths) * 3 + 1
+    else:
+        col_attr_length = len(npz_paths) * 2 + 1
 
     for i, path in enumerate(npz_paths):
         sample_data = load_samples(path)
@@ -411,16 +435,17 @@ def generate_grid_for_mpl(npz_paths, dest_path='', x_labels=None):
             master_diff = rescale_image(master_diff, 0.5)
         master_diffs.append(master_diff)
 
-        pred_masks, gt_masks = create_mask_batch(sample_data['originals'],
-                                                 sample_data['samples'],
-                                                 sample_data['names'],
-                                                 args.gt_mask_path,
-                                                 args.pred_mask_threshold)
-        pred_masks = np.repeat(np.concatenate(pred_masks, axis=0)[:, :, np.newaxis], 3, axis=2)
-        gt_masks = np.repeat(np.concatenate(gt_masks, axis=0)[:, :, np.newaxis], 3, axis=2)
-        master_org = (np.concatenate(np.repeat(sample_data['originals'], 3, axis=1), axis=1).transpose(1, 2, 0) * 255).astype(np.uint8)
-        master_overlay = overlay_masks(master_org, [pred_masks, gt_masks], [(255, 0, 255), (0, 0, 255)], border_thickness=1)
-        master_overlays.append((master_overlay / 255.).transpose(2, 0, 1))
+        if generate_masks:
+            pred_masks, gt_masks = create_mask_batch(sample_data['originals'],
+                                                    sample_data['samples'],
+                                                    sample_data['names'],
+                                                    args.gt_mask_path,
+                                                    args.pred_mask_threshold)
+            pred_masks = np.repeat(np.concatenate(pred_masks, axis=0)[:, :, np.newaxis], 3, axis=2)
+            gt_masks = np.repeat(np.concatenate(gt_masks, axis=0)[:, :, np.newaxis], 3, axis=2)
+            master_org = (np.concatenate(np.repeat(sample_data['originals'], 3, axis=1), axis=1).transpose(1, 2, 0) * 255).astype(np.uint8)
+            master_overlay = overlay_masks(master_org, [pred_masks, gt_masks], [(255, 0, 255), (0, 0, 255)], border_thickness=1)
+            master_overlays.append((master_overlay / 255.).transpose(2, 0, 1))
 
     for sample_col in master_samples:
         img_list = np.array_split(sample_col, batch_size, axis=1)
@@ -432,16 +457,19 @@ def generate_grid_for_mpl(npz_paths, dest_path='', x_labels=None):
         for i, img in enumerate(img_list):
             img_grid[i].append(img)
     
-    for sample_col in master_overlays:
-        img_list = np.array_split(sample_col, batch_size, axis=1)
-        for i, img in enumerate(img_list):
-            img_grid[i].append(img)
+    if generate_masks:
+        for sample_col in master_overlays:
+            img_list = np.array_split(sample_col, batch_size, axis=1)
+            for i, img in enumerate(img_list):
+                img_grid[i].append(img)
 
     nrow = len(img_grid)
     ncol = col_attr_length
 
     fig = plt.subplots(figsize=(ncol * 2.56, nrow * 2.56), dpi=100, layout='tight')
     gs = gridspec.GridSpec(nrow, ncol, wspace=0.0, hspace=0.0)
+
+    fontdict = {'size': 16}
 
     for row in range(nrow):
         for col in range(ncol):
@@ -453,18 +481,25 @@ def generate_grid_for_mpl(npz_paths, dest_path='', x_labels=None):
             ax.tick_params(top=False, right=False, bottom=False, left=False, pad=0)
             ax.set(frame_on=False)
             if row == 0:
-                ax.set_xlabel(x_labels[col])
+                ax.set_xlabel(x_labels[col], wrap=True, fontdict=fontdict)
                 ax.xaxis.set_label_position('top')
             if col == 0:
-                ax.set_ylabel(y_labels.tolist()[row], wrap=True)
-                if y_label_colors.tolist()[row] == 0:
+                ax.set_ylabel(y_labels.tolist()[row].split('_')[0], wrap=True, fontdict=fontdict)
+                if y_label_colors.tolist()[row] == 1:
                     ax.yaxis.label.set_color('red')
                 ax.yaxis.set_label_position('left')
     
     plt.tight_layout(pad=1)
     plt.savefig(os.path.join(dest_path, 'chexpert_eval_mpl_test.png'), dpi=100)
 
-def generate_master_image(npz_paths):
+def generate_metrics(npz_paths, include_iou=False):
+    results = []
+    for i, path in enumerate(npz_paths): # This is a column
+        sample_data = load_samples(path)
+        results.append(calculate_metric_scores(sample_data['originals'], sample_data['samples'], sample_data['names'], include_iou=include_iou))
+    return results
+
+def generate_master_image(npz_paths, generate_masks=False):
     master_image = None
     master_samples = []
     master_diffs = []
@@ -490,22 +525,25 @@ def generate_master_image(npz_paths):
             master_diff = rescale_image(master_diff, 0.5)
         master_diffs.append(master_diff)
 
-        pred_masks, gt_masks = create_mask_batch(sample_data['originals'],
-                                                 sample_data['samples'],
-                                                 sample_data['names'],
-                                                 args.gt_mask_path,
-                                                 args.pred_mask_threshold)
-        pred_masks = np.repeat(np.concatenate(pred_masks, axis=0)[:, :, np.newaxis], 3, axis=2)
-        gt_masks = np.repeat(np.concatenate(gt_masks, axis=0)[:, :, np.newaxis], 3, axis=2)
-        master_org = (np.concatenate(np.repeat(sample_data['originals'], 3, axis=1), axis=1).transpose(1, 2, 0) * 255).astype(np.uint8)
-        master_overlay = overlay_masks(master_org, [pred_masks, gt_masks], [(255, 0, 255), (0, 0, 255)], border_thickness=1)
-        master_overlays.append((master_overlay / 255.).transpose(2, 0, 1))
+        if generate_masks:
+            pred_masks, gt_masks = create_mask_batch(sample_data['originals'],
+                                                    sample_data['samples'],
+                                                    sample_data['names'],
+                                                    args.gt_mask_path,
+                                                    args.pred_mask_threshold)
+            pred_masks = np.repeat(np.concatenate(pred_masks, axis=0)[:, :, np.newaxis], 3, axis=2)
+            gt_masks = np.repeat(np.concatenate(gt_masks, axis=0)[:, :, np.newaxis], 3, axis=2)
+            master_org = (np.concatenate(np.repeat(sample_data['originals'], 3, axis=1), axis=1).transpose(1, 2, 0) * 255).astype(np.uint8)
+            master_overlay = overlay_masks(master_org, [pred_masks, gt_masks], [(255, 0, 255), (0, 0, 255)], border_thickness=1)
+            master_overlays.append((master_overlay / 255.).transpose(2, 0, 1))
 
     
     master_samples = visualize(np.concatenate(np.array(master_samples), axis=2))
     master_diffs = visualize(np.concatenate(np.array(master_diffs), axis=2))
-    master_overlays = visualize(np.concatenate(np.array(master_overlays), axis=2))
-    return np.concatenate([master_image, master_samples, master_diffs, master_overlays], axis=2), results
+    if generate_masks:
+        master_overlays = visualize(np.concatenate(np.array(master_overlays), axis=2))
+        return np.concatenate([master_image, master_samples, master_diffs, master_overlays], axis=2), results
+    return np.concatenate([master_image, master_samples, master_diffs], axis=2), results
                                    
         
 def generate_diff_batch(original, reconstructed):
@@ -543,21 +581,41 @@ def main():
     scenarios = args.x_labels
     x_labels.extend(scenarios)
     x_labels.extend([f'Heatmap ({x})' for x in scenarios])
-    x_labels.extend([f'Overlay ({x})' for x in scenarios])
-    generate_grid_for_mpl(args.npz_paths, dest_path=args.result_dir, x_labels=x_labels)
-    final_image, final_metrics = generate_master_image(args.npz_paths)
-    final_image = (final_image.transpose(1, 2, 0) * 255).astype(np.uint8)
-    Image.fromarray(final_image).save(os.path.join(args.result_dir, 'compiled_master_image.png'))
+    if args.include_miou:
+        x_labels.extend([f'Overlay ({x})' for x in scenarios])
+    generate_grid_for_mpl(args.npz_paths, dest_path=args.result_dir, x_labels=x_labels, generate_masks=args.include_miou)
 
-    print(f'Model,PSNR,SSIM,FID,mIoU,Specificity')
-    for scenario, metric in zip(scenarios, final_metrics):
-        print(f"{scenario},{metric['psnr'].item():02.3f},{metric['ssim'].item():02.3f},{metric['fid'].item():02.3f},{metric['miou'].item():02.3f},{metric['specificity'].item():02.3f}")
+    # final_image = generate_master_image(args.npz_paths, generate_masks=args.include_miou)
+    # final_image = (final_image.transpose(1, 2, 0) * 255).astype(np.uint8)
+    # Image.fromarray(final_image).save(os.path.join(args.result_dir, 'compiled_master_image.png'))
+
+    final_metrics = generate_metrics(args.npz_paths, args.include_miou)
+
+    if args.include_miou:
+        print(f'Model,PSNR,SSIM,FID,mIoU,Specificity')
+        for scenario, metric in zip(scenarios, final_metrics):
+            print(f"{scenario},{metric['psnr'].item():02.3f},{metric['ssim'].item():02.3f},{metric['fid'].item():02.3f},{metric['miou'].item():02.3f},{metric['specificity'].item():02.3f}")
+
+        with open(os.path.join(args.result_dir, 'metrics.csv'), 'w') as csvfile:
+            csvfile.write(f'Model,PSNR,SSIM,FID,mIoU,Specificity\n')
+            for scenario, metric in zip(scenarios, final_metrics):
+                csvfile.write(f"{scenario},{metric['psnr'].item():02.3f},{metric['ssim'].item():02.3f},{metric['fid'].item():02.3f},{metric['miou'].item():02.3f},{metric['specificity'].item():02.3f}\n")
+    else:
+        print(f'Model,PSNR,SSIM,FID')
+        for scenario, metric in zip(scenarios, final_metrics):
+            print(f"{scenario},{metric['psnr'].item():02.3f},{metric['ssim'].item():02.3f},{metric['fid'].item():02.3f}")
+
+        with open(os.path.join(args.result_dir, 'metrics.csv'), 'w') as csvfile:
+            csvfile.write(f'Model,PSNR,SSIM,FID,mIoU,Specificity\n')
+            for scenario, metric in zip(scenarios, final_metrics):
+                csvfile.write(f"{scenario},{metric['psnr'].item():02.3f},{metric['ssim'].item():02.3f},{metric['fid'].item():02.3f}\n")
 
 def create_argparser():
     parser = argparse.ArgumentParser()
     parser.add_argument(f"--result_dir", required=False, default=os.path.join('results', 'latest'), type=str)
     parser.add_argument(f"--npz_paths", required=True, type=str, nargs='+')
     parser.add_argument(f"--x_labels", required=False, default=None, type=str, nargs='+')
+    parser.add_argument(f"--include_miou", required=False, default=False, type=str2bool)
     parser.add_argument(f"--gt_mask_path", type=str, default='/workspace/CheXlocalize/256_segmentations_pleural_effusion')
     parser.add_argument(f"--pred_mask_threshold", type=float, default=np.nan)
     return parser

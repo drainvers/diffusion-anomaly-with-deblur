@@ -31,6 +31,8 @@ from guided_diffusion.script_util import (
 # Saving images
 from PIL import Image
 
+from torchinfo import summary
+
 def choose_sample_fn(diffusion_obj, use_ddim, use_ma_sampling):
    if use_ddim:
        if use_ma_sampling:
@@ -47,6 +49,7 @@ def visualize(img):
 
 def main():
     args = create_argparser().parse_args()
+    args.result_dir = f'{args.result_dir}_{datetime.date.today().strftime("%Y_%m_%d")}'
 
     dist_util.setup_dist()
     logger.configure(dir=args.result_dir)
@@ -102,6 +105,12 @@ def main():
     print('pmodel', p1, 'pclass', p2)
     logger.log('pmodel', p1, 'pclass', p2)
 
+    print(summary(model, input_data={
+        'x': th.randn(size=(args.batch_size, 1, 256, 256), device=dist_util.dev()),
+        'timesteps': diffusion._scale_timesteps(th.randint(0, 1, (args.batch_size,), device=dist_util.dev()).long()),
+        'y':  th.zeros(size=(args.batch_size,), device=dist_util.dev(), dtype=th.int),
+    }))
+
 
     classifier.to(dist_util.dev())
     if args.classifier_use_fp16:
@@ -156,16 +165,14 @@ def main():
             number = img[1]["name"]
             org_label = img[1]["y"].to(dist_util.dev())
             
-            viz.image(visualize(img[0][0, ...]), opts=dict(caption=f"img {'healthy' if img[1]['y'] else 'diseased'} {number[0]}"))
+            viz.image(visualize(img[0][0, ...]), opts=dict(caption=f"img {'diseased' if img[1]['y'] else 'healthy'} {number[0]}"))
             print('img1', img[1])
             print('number', number)
 
         if args.class_cond:
-            classes = th.randint(
-                low=0, high=1, size=(args.batch_size,), device=dist_util.dev()
-            )
+            classes = th.zeros(size=(args.batch_size,), device=dist_util.dev(), dtype=th.int)
             model_kwargs["y"] = classes
-            print('y', model_kwargs["y"])
+            print('target y', model_kwargs["y"])
         sample_fn = (
             diffusion.p_sample_loop_known if not args.use_ddim else diffusion.ddim_sample_loop_known
         )

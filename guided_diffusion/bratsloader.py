@@ -42,21 +42,20 @@ class ChexpertDataset(torch.utils.data.Dataset):
         df_annotations = pd.read_csv(self.annotations_path)
 
         if data_filter == "frontal_only":
-            df_annotations = df_annotations[(df_annotations["Frontal/Lateral"] == "Frontal")].copy(deep=True)
+            df_annotations = df_annotations[(df_annotations["Frontal/Lateral"] == "Frontal")]
             if frontal_mode == "ap":
-                df_annotations = df_annotations[(df_annotations["AP/PA"] == "AP")].copy(deep=True)
+                df_annotations = df_annotations[(df_annotations["AP/PA"] == "AP")]
             elif frontal_mode == "pa":
-                df_annotations = df_annotations[(df_annotations["AP/PA"] == "PA")].copy(deep=True)
+                df_annotations = df_annotations[(df_annotations["AP/PA"] == "PA")]
 
         self.local_classes = None
         if class_cond:
             # Generate labels for healthy images and images with pleural effusions
-            df_annotations.loc[(df_annotations["No Finding"] == 1), 'Label'] = 1 # Healthy
-            df_annotations.loc[(df_annotations["Pleural Effusion"] == 1), 'Label'] = 0 # Diseased
-            df_annotations = df_annotations[df_annotations['Label'].isin([0, 1])].copy(deep=True)
+            df_annotations.loc[(df_annotations["No Finding"] == 1), 'Label'] = 0 # Healthy
+            df_annotations.loc[(df_annotations["Pleural Effusion"] == 1), 'Label'] = 1 # Diseased
 
-            df_annotations_healthy = df_annotations[(df_annotations["Label"] == 1)]
-            df_annotations_diseased = df_annotations[(df_annotations["Label"] == 0)]
+            df_annotations_healthy = df_annotations[(df_annotations["Label"] == 0)]
+            df_annotations_diseased = df_annotations[(df_annotations["Label"] == 1)]
 
             if unique_patients_only:
                 df_annotations_healthy = self._clean_df(df_annotations_healthy)
@@ -69,7 +68,7 @@ class ChexpertDataset(torch.utils.data.Dataset):
                 if len(df_annotations_diseased.index) > sample_n:
                     df_annotations_diseased = df_annotations_diseased.sample(n=sample_n, random_state=1911)
 
-            df_annotations = pd.concat([df_annotations_diseased, df_annotations_healthy]).copy(deep=True)
+            df_annotations = pd.concat([df_annotations_diseased, df_annotations_healthy])
 
             self.local_classes = df_annotations['Label'].to_list()
         
@@ -224,11 +223,8 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from matplotlib import gridspec
 
-    train_ds = ChexpertDataset('/workspace/CheXpert-v1.0', test_flag=False, sample_n=20000)
+    train_ds = ChexpertDataset('/workspace/CheXpert-v1.0', class_cond=True, test_flag=False, data_filter="frontal_only")
+    test_ds = ChexpertDataset('/workspace/CheXpert-v1.0', class_cond=True, test_flag=True, data_filter="frontal_only")
     # preview_dataset(train_ds, 3, 3)
     train_ds.summarize()
-    datal = torch.utils.data.DataLoader(
-            train_ds,
-            batch_size=4,
-            shuffle=True)
-    print(len(datal) * 4)
+    test_ds.summarize()

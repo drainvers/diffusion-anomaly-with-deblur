@@ -90,7 +90,7 @@ def main():
         data = iter(datal)
 
     elif args.dataset == 'chexpert':
-        ds = ChexpertDataset(args.data_dir, class_cond=True, test_flag=False, sample_n=20000)
+        ds = ChexpertDataset(args.data_dir, class_cond=True, data_filter="frontal_only", test_flag=False, sample_n=16000)
         datal = th.utils.data.DataLoader(
             ds,
             batch_size=args.batch_size,
@@ -98,7 +98,7 @@ def main():
         data = iter(datal)
         
         if args.val_data_dir != "":
-            val_ds = ChexpertDataset(args.data_dir, class_cond=True, test_flag=True)
+            val_ds = ChexpertDataset(args.data_dir, class_cond=True, data_filter="frontal_only", test_flag=True)
             val_datal = th.utils.data.DataLoader(
                 val_ds,
                 batch_size=args.batch_size,
@@ -122,7 +122,6 @@ def main():
         #     )
         #     val_data = iter(val_datal)
         print('dataset is chexpert')
-        print(ds.summarize())
 
 
     logger.log(f"creating optimizer...")
@@ -211,11 +210,12 @@ def main():
 
     correct=0; total=0
     for step in range(args.iterations - resume_step):
-        logger.logkv("step", step + resume_step)
-        logger.logkv(
-            "samples",
-            (step + resume_step + 1) * args.batch_size * dist.get_world_size(),
-        )
+        if not step % args.log_interval:
+            logger.logkv("step", step + resume_step)
+            logger.logkv(
+                "samples",
+                (step + resume_step + 1) * args.batch_size * dist.get_world_size(),
+            )
         if args.anneal_lr:
             set_annealed_lr(opt, args.lr, (step + resume_step) / args.iterations)
         print('step', step + resume_step)

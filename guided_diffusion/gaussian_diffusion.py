@@ -1018,9 +1018,7 @@ class GaussianDiffusion:
             indices = tqdm(indices)
 
         for i in indices:
-            k=abs(time-1-i)
-            if k % 20 == 0:
-                print('k', k)
+            k = abs(time - 1 - i)
 
             t = th.tensor([k] * shape[0], device=device)
             with th.no_grad():
@@ -1035,8 +1033,12 @@ class GaussianDiffusion:
                 )
                 yield out
                 img = out["sample"]
+            
+            if k % 50 == 0:
+                print('k', k)
 
-        # viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="reversesample"))
+        viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="latent"))
+
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
@@ -1054,7 +1056,7 @@ class GaussianDiffusion:
             img = out["sample"]
             saliency=out['saliency']
 
-            if i % 20 == 0:
+            if i % 50 == 0:
                 print('i', i)
 
     def _vb_terms_bpd(
